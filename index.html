@@ -101,6 +101,8 @@
   <button class="btn" data-preset="grid" title="equal tiles">grid</button>
   <button class="btn" data-preset="focus" title="one big + column">focus</button>
   <button class="btn" data-preset="cascade" title="offset tiles">cascade</button>
+  <button class="btn" id="rotl" title="rotate contents back one slot (←)">⟲</button>
+  <button class="btn" id="rotr" title="rotate contents forward one slot (→)">⟳</button>
   <button class="btn" id="muteall" title="silence every pane">mute all</button>
   <button class="btn" id="demo" title="load the demo wall">demo</button>
   <button class="btn" id="clear" title="empty the canvas">clear</button>
@@ -535,6 +537,23 @@ canvas.addEventListener('drop', e => {
   addPane(parsed, rect);
 });
 
+/* ---------- rotate: tmux-style content rotation ----------
+   The wall's shape is sacred — rotation only permutes which content sits
+   in which slot (reading order), so players keep playing and the layout
+   never degrades. No pointer math, no iframes involved. */
+function readingOrder(a, b) {
+  const ca = a.rect.y + a.rect.h / 2, cb = b.rect.y + b.rect.h / 2;
+  if (Math.abs(ca - cb) > Math.max(a.rect.h, b.rect.h) * 0.25) return ca - cb;
+  return a.rect.x - b.rect.x;
+}
+function rotate(dir) {                   // +1: each pane's content → next slot
+  const list = [...panes.values()].sort(readingOrder);
+  const n = list.length; if (n < 2) return;
+  const rects = list.map(p => ({ ...p.rect }));
+  list.forEach((p, i) => { p.rect = rects[(i - dir + n) % n]; applyRect(p); });
+  save();
+}
+
 /* ---------- layout presets ---------- */
 const PRESETS = {
   verticals() {
@@ -615,6 +634,15 @@ $('#url').addEventListener('keydown', e => { if (e.key === 'Enter') addFromInput
 document.querySelectorAll('[data-mode]').forEach(b =>
   b.addEventListener('click', () => setMode(b.dataset.mode)));
 $('#muteall').addEventListener('click', muteAll);
+$('#rotr').addEventListener('click', () => rotate(1));
+$('#rotl').addEventListener('click', () => rotate(-1));
+window.addEventListener('keydown', e => {
+  if (['ArrowRight', 'ArrowLeft', 'ArrowUp', 'ArrowDown'].includes(e.key) &&
+      !/INPUT|TEXTAREA/.test(document.activeElement.tagName)) {
+    rotate({ ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }[e.key]);
+    e.preventDefault();
+  }
+});
 $('#clear').addEventListener('click', () => {
   [...panes.values()].forEach(p => removePane(p, { silent: true }));
   focusKey = null; soloId = null;
@@ -680,7 +708,7 @@ window.PIP = {
   addChat: vid => addPane({ kind: 'chat', vid }, { x: .74, y: .01, w: .25, h: .98 }),
   parse: parseRef, replace: (id, url) => { const p = panes.get(id); if (p) return replacePane(p, parseRef(url)); },
   focusById: id => { const p = panes.get(id); if (p) setFocus(p); },
-  presets: PRESETS
+  rotate, presets: PRESETS
 };
 </script>
 </body>

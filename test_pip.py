@@ -126,6 +126,37 @@ with sync_playwright() as pw:
          f"cls={dragging_cls} iframe.pointerEvents={pe}")
     step("swap: drop on another pane swaps geometry", swapped, f"a:{a2} b:{b2}")
 
+    # --- rotate: contents permute over the SAME shape; players keep playing ---
+    page.evaluate("() => window.PIP.presets.grid()")
+    page.wait_for_timeout(300)
+    before_rot = state(page)
+    vids_before = {p["vid"] or p["src"]: p["rect"] for p in before_rot["panes"]}
+    shape_before = sorted([(r["x"], r["y"], r["w"], r["h"]) for r in [p["rect"] for p in before_rot["panes"]]])
+    playing_before = {p["id"]: p["playing"] for p in before_rot["panes"]}
+    page.evaluate("() => window.PIP.rotate(1)")
+    page.wait_for_timeout(400)
+    after_rot = state(page)
+    shape_after = sorted([(r["x"], r["y"], r["w"], r["h"]) for r in [p["rect"] for p in after_rot["panes"]]])
+    vids_after = {p["vid"] or p["src"]: p["rect"] for p in after_rot["panes"]}
+    # every content moved to a rect that some pane previously occupied
+    old_rects = set((r["x"], r["y"], r["w"], r["h"]) for r in [p["rect"] for p in before_rot["panes"]])
+    all_moved_to_old = all((r["x"], r["y"], r["w"], r["h"]) in old_rects
+                           for r in [p["rect"] for p in after_rot["panes"]])
+    no_one_home = all(vids_after[k] != v for k, v in vids_before.items())
+    step("rotate: shape identical, contents permuted", shape_after == shape_before and all_moved_to_old,
+         f"shape_equal={shape_after == shape_before}")
+    step("rotate: every content actually moved slot", no_one_home)
+    # players still alive after rotation
+    still_playing = page.evaluate("""() => {
+      let n = 0;
+      window.PIP.panes.forEach(p => {
+        try { if (p.player && p.player.getPlayerState() === 1) n++; } catch(e){}
+        try { if (p.media && !p.media.paused) n++; } catch(e){}
+      });
+      return n;
+    }""")
+    step("rotate: players keep playing through rotation", still_playing >= 3, f"playing={still_playing}")
+
     # --- focus: ◎ makes one big + rail; persists across reload ---
     target = [p for p in st2["panes"] if p["kind"] == "file"][0]["id"]
     page.evaluate(f"() => window.PIP.focusById('{target}')")

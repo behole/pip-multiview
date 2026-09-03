@@ -34,6 +34,11 @@ solo one audio, ignore the algorithm entirely.
     files (mp4/webm/ogg), and any page that allows embedding — one URL
     box, auto-detected. Sites that send `X-Frame-Options: DENY` can't be
     framed by anyone; they get a hint badge.
+- **Rotate without dragging (v1.3).** `⟲`/`⟳` — or just the arrow keys —
+  rotate contents across the wall's slots in reading order. The shape
+  never changes, players keep playing through it, and the whole class of
+  drag bugs is structurally impossible. Dragging stays for freeform
+  shaping; rotation is the one-click everyday move.
   - `clear` truly empties the wall; the demo is its own `demo` button.
 
 ## Run it
@@ -75,4 +80,3 @@ reasons-to-visit are yours.
 - Search pane (Data API, 100 free queries/day)
 - Channel → active-stream auto-resolve for chat panes (1-quota API call)
 - Document PiP pop-out of the whole wall
-- Snap-to-shapes: drag a pane to a zone (halves, thirds) and it locks in
