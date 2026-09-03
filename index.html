@@ -324,7 +324,14 @@ function buildIframePane(rec, src, fallbackTitle) {
   stage.appendChild(iframe);
   rec.title = rec.title || fallbackTitle;
   $('.title', rec.el).textContent = rec.title;
-  $('.badge', stage).textContent = 'blank? this site refuses embedding';
+  const b = $('.badge', stage);
+  b.textContent = 'blank? this site refuses embedding';
+  b.style.display = 'block';
+  // cross-origin means we can't confirm blankness — hide the hint once the
+  // frame signals it's alive (any paint fires load; stubborn blanks keep it)
+  iframe.addEventListener('load', () => setTimeout(() => {
+    b.style.display = 'none';
+  }, 4000));
 }
 
 function buildFilePane(rec) {
