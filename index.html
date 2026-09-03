@@ -63,6 +63,10 @@
   .bar { height: 4px; background: #1a1a1f; cursor: pointer; }
   .bar > div { height: 100%; width: 0%; background: var(--accent); }
 
+  /* chat pane: the iframe is the whole interaction — no transport chrome */
+  .pane.chat .play, .pane.chat .audio, .pane.chat .bar { display: none; }
+  .pane.chat .stage { background: var(--pane); }
+
   .grip { position: absolute; right: 2px; bottom: 5px; width: 14px; height: 14px;
     cursor: nwse-resize; z-index: 4;
     background: linear-gradient(135deg, transparent 50%, var(--edge-hi) 50%); }
@@ -77,6 +81,8 @@
   <span class="logo">PIP</span>
   <input id="url" type="text" placeholder="paste a youtube url — watch / youtu.be / shorts / live" spellcheck="false">
   <button class="btn accent" id="add">+ add</button>
+  <button class="btn" data-mode="video" title="url box adds video panes">video</button>
+  <button class="btn" data-mode="chat" title="url box adds a live chat pane">chat</button>
   <span class="spacer"></span>
   <button class="btn" data-preset="verticals" title="stack verticals in columns">3-verticals</button>
   <button class="btn" data-preset="grid" title="equal tiles">grid</button>
@@ -122,7 +128,7 @@ function parseVideoId(raw) {
 
 function save() {
   const data = [...panes.values()].map(p => ({
-    vid: p.vid, rect: p.rect, title: p.title
+    kind: p.kind || 'video', vid: p.vid, rect: p.rect, title: p.title
   }));
   localStorage.setItem(LS_KEY, JSON.stringify(data));
 }
@@ -132,6 +138,7 @@ const load = () => { try { return JSON.parse(localStorage.getItem(LS_KEY)); } ca
 function addPane(vid, rect, opts = {}) {
   if (panes.size >= MAX_PANES) { toast(`cap is ${MAX_PANES} panes — each iframe is heavy`); return null; }
   const id = uid();
+  const kind = opts.kind || 'video';
   const el = document.createElement('div');
   el.className = 'pane'; el.dataset.id = id;
   el.innerHTML = `
@@ -150,7 +157,7 @@ function addPane(vid, rect, opts = {}) {
     <div class="grip"></div>`;
   canvas.appendChild(el);
 
-  const rec = { id, vid, el, rect, player: null, title: '', playing: false,
+  const rec = { id, kind, vid, el, rect, player: null, title: '', playing: false,
     prevRect: null };
   panes.set(id, rec);
   applyRect(rec);
@@ -168,6 +175,8 @@ function addPane(vid, rect, opts = {}) {
     const d = rec.player.getDuration();
     if (d > 0) rec.player.seekTo(e.offsetX / e.currentTarget.offsetWidth * d, true);
   });
+
+  if (kind === 'chat') { buildChatPane(rec, opts); if (!opts.silent) save(); return rec; }
 
   rec.player = new YT.Player($('.mount', el), {
     videoId: vid,
@@ -260,12 +269,37 @@ function toggleMax(rec) {
   applyRect(rec); save();
 }
 
+/* ---------- chat pane ---------- */
+function parseChatRef(raw) {           // any live/upcoming URL → its video id
+  const s = raw.trim();
+  if (/^[\w-]{11}$/.test(s)) return s;
+  const m = s.match(/(?:v=|youtu\.be\/|\/live\/)([\w-]{11})/);
+  return m ? m[1] : null;
+}
+
+function buildChatPane(rec, opts = {}) {
+  rec.el.classList.add('chat');
+  const stage = $('.stage', rec.el);
+  $('.veil', stage).style.display = 'none';
+  $('.badge', stage).style.display = 'none';
+
+  const iframe = document.createElement('iframe');
+  iframe.src = `https://www.youtube.com/live_chat?v=${rec.vid}&embed_domain=${location.hostname}&dark_theme=1`;
+  iframe.allow = 'autoplay; encrypted-media';
+  stage.appendChild(iframe);
+
+  rec.title = opts.title || 'live chat';
+  $('.title', rec.el).textContent = rec.title;
+  // no client-side dead-detection: the chat iframe is always cross-origin.
+  // If the stream has no chat, YouTube renders its own empty state in-frame.
+}
+
 /* ---------- audio: solo model ---------- */
 function toggleSolo(rec) {
   if (soloId === rec.id) {                      // second click = back to all-muted
-    rec.player.mute(); soloId = null;
+    if (rec.player) rec.player.mute(); soloId = null;
   } else {
-    panes.forEach(p => { p.player.mute(); });
+    panes.forEach(p => { if (p.player) p.player.mute(); });
     rec.player.unMute(); rec.player.setVolume(100);
     if (!rec.playing) rec.player.playVideo();
     soloId = rec.id;
@@ -281,7 +315,7 @@ function refreshSoloUi() {
   });
 }
 
-function muteAll() { soloId = null; panes.forEach(p => p.player.mute()); refreshSoloUi(); }
+function muteAll() { soloId = null; panes.forEach(p => { if (p.player) p.player.mute(); }); refreshSoloUi(); }
 
 function togglePlay(rec) {
   if (!rec.player || !rec.player.getPlayerState) return;
@@ -345,16 +379,37 @@ document.querySelectorAll('[data-preset]').forEach(b =>
   }));
 
 /* ---------- topbar wiring ---------- */
+let addMode = 'video';                 // what the url box produces next
+function setMode(m) {
+  addMode = m;
+  $('#add').textContent = m === 'chat' ? '+ chat' : '+ add';
+  $('#url').placeholder = m === 'chat'
+    ? 'paste a live / upcoming stream url — chat becomes a pane'
+    : 'paste a youtube url — watch / youtu.be / shorts / live';
+  document.querySelectorAll('[data-mode]').forEach(b =>
+    b.classList.toggle('on', b.dataset.mode === m));
+}
+
 function addFromInput() {
   const input = $('#url');
-  const vid = parseVideoId(input.value);
-  if (!vid) return toast('couldn\'t find a video id in that');
+  const ref = input.value;
+  if (!ref.trim()) return;
   input.value = '';
-  const i = panes.size;
-  addPane(vid, { x: .02 + i * .07, y: .03 + i * .06, w: .44, h: .55 });
+  if (addMode === 'chat') {
+    const vid = parseChatRef(ref);
+    if (!vid) return toast('couldn\'t find a stream id in that');
+    addPane(vid, { x: .74, y: .01, w: .25, h: .98 }, { kind: 'chat', title: 'live chat' });
+  } else {
+    const vid = parseVideoId(ref);
+    if (!vid) return toast('couldn\'t find a video id in that');
+    const i = panes.size;
+    addPane(vid, { x: .02 + i * .07, y: .03 + i * .06, w: .44, h: .55 });
+  }
 }
 $('#add').addEventListener('click', addFromInput);
 $('#url').addEventListener('keydown', e => { if (e.key === 'Enter') addFromInput(); });
+document.querySelectorAll('[data-mode]').forEach(b =>
+  b.addEventListener('click', () => setMode(b.dataset.mode)));
 $('#muteall').addEventListener('click', muteAll);
 $('#clear').addEventListener('click', () => {
   localStorage.removeItem(LS_KEY); location.reload();
@@ -364,7 +419,7 @@ $('#clear').addEventListener('click', () => {
 window.onYouTubeIframeAPIReady = () => {
   const saved = load();
   if (saved && saved.length) {
-    saved.forEach(p => addPane(p.vid, p.rect, { silent: true }));
+    saved.forEach(p => addPane(p.vid, p.rect, { silent: true, kind: p.kind, title: p.title }));
     $('#note').textContent = `${saved.length} panes restored`;
   } else {
     // demo wall — replace freely
@@ -397,7 +452,9 @@ setTimeout(() => {
 
 /* debug / test hook */
 window.PIP = { panes, solo: id => { const p = panes.get(id); if (p) toggleSolo(p); },
-  add: vid => addPane(vid, { x: .5, y: .3, w: .4, h: .5 }), presets: PRESETS };
+  add: vid => addPane(vid, { x: .5, y: .3, w: .4, h: .5 }),
+  addChat: vid => addPane(vid, { x: .74, y: .01, w: .25, h: .98 }, { kind: 'chat' }),
+  presets: PRESETS };
 </script>
 </body>
 </html>

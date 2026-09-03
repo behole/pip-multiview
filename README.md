@@ -18,6 +18,10 @@ solo one audio, ignore the algorithm entirely.
   is still yours.
 - **Per-pane chrome:** play/pause, seek bar, live title, close. Videos that
   refuse embedding get flagged with a badge instead of pretending to work.
+- **Chat pane (v1.1).** Toggle `chat`, paste a live/upcoming stream URL →
+  the stream's live chat becomes just another viewport (dark theme, real
+  scroll, can send if you're logged into YouTube). Chat panes are
+  kind-aware in persistence and exempt from the audio model.
 
 ## Run it
 
@@ -55,6 +59,6 @@ reasons-to-visit are yours.
 
 ## Ideas on deck
 
-- Chat pane — YouTube Live Chat as just another viewport
 - Search pane (Data API, 100 free queries/day)
+- Channel → active-stream auto-resolve for chat panes (1-quota API call)
 - Document PiP pop-out of the whole wall
