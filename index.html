@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="theme-color" content="#0a0a0b">
+<title>PIP — multiview</title>
+<style>
+  :root {
+    --bg: #0a0a0b; --pane: #101013; --edge: #232329; --edge-hi: #3a3a44;
+    --text: #ececf1; --dim: #8b8b96; --accent: #f05a28; --danger: #e5484d;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; background: var(--bg); color: var(--text);
+    font: 13px/1.4 ui-sans-serif, system-ui, sans-serif; overflow: hidden; }
+
+  #topbar { height: 48px; display: flex; align-items: center; gap: 10px;
+    padding: 0 12px; border-bottom: 1px solid var(--edge); background: var(--pane); }
+  #topbar .logo { font-weight: 700; letter-spacing: .06em; color: var(--accent); }
+  #url { flex: 0 1 340px; background: #0a0a0b; border: 1px solid var(--edge);
+    color: var(--text); border-radius: 6px; padding: 6px 10px; font: inherit; }
+  #url:focus { outline: none; border-color: var(--accent); }
+  .btn { background: #16161a; border: 1px solid var(--edge); color: var(--text);
+    border-radius: 6px; padding: 5px 10px; font: inherit; cursor: pointer; }
+  .btn:hover { border-color: var(--edge-hi); background: #1d1d22; }
+  .btn.accent { border-color: var(--accent); color: var(--accent); }
+  .btn.on { background: var(--accent); color: #000; border-color: var(--accent); }
+  .spacer { flex: 1; }
+  #note { color: var(--dim); font-size: 12px; }
+  #toast { position: fixed; bottom: 14px; left: 50%; transform: translateX(-50%);
+    background: #1d1d22; border: 1px solid var(--edge-hi); border-radius: 8px;
+    padding: 8px 14px; opacity: 0; transition: opacity .25s; pointer-events: none; z-index: 9999; }
+  #toast.show { opacity: 1; }
+
+  #canvas { position: relative; height: calc(100% - 48px); overflow: hidden;
+    background:
+      linear-gradient(var(--edge) 1px, transparent 1px) 0 0 / 100% 96px,
+      linear-gradient(90deg, var(--edge) 1px, transparent 1px) 0 0 / 96px 100%; }
+
+  .pane { position: absolute; background: var(--pane); border: 1px solid var(--edge);
+    border-radius: 10px; overflow: hidden; display: flex; flex-direction: column;
+    box-shadow: 0 8px 30px rgba(0,0,0,.45); }
+  .pane.focus { border-color: var(--edge-hi); }
+  .pane.solo { border-color: var(--accent); }
+
+  .head { height: 30px; flex: 0 0 30px; display: flex; align-items: center; gap: 6px;
+    padding: 0 4px 0 10px; background: rgba(16,16,19,.92); cursor: grab; user-select: none; }
+  .head:active { cursor: grabbing; }
+  .title { flex: 1; font-size: 12px; color: var(--dim); white-space: nowrap;
+    overflow: hidden; text-overflow: ellipsis; }
+  .icon { width: 26px; height: 24px; border: 0; background: transparent; color: var(--dim);
+    border-radius: 5px; cursor: pointer; font-size: 13px; line-height: 1; }
+  .icon:hover { background: #1d1d22; color: var(--text); }
+  .icon.audio.on { color: var(--accent); }
+  .icon.close:hover { color: var(--danger); }
+
+  .stage { position: relative; flex: 1; background: #000; }
+  .stage .mount, .stage iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+  .veil { position: absolute; inset: 0; z-index: 2; cursor: pointer; }
+  .badge { position: absolute; top: 8px; left: 8px; z-index: 3; background: var(--danger);
+    color: #fff; font-size: 11px; padding: 2px 8px; border-radius: 5px; display: none; }
+
+  .bar { height: 4px; background: #1a1a1f; cursor: pointer; }
+  .bar > div { height: 100%; width: 0%; background: var(--accent); }
+
+  .grip { position: absolute; right: 2px; bottom: 5px; width: 14px; height: 14px;
+    cursor: nwse-resize; z-index: 4;
+    background: linear-gradient(135deg, transparent 50%, var(--edge-hi) 50%); }
+
+  .hint { position: absolute; inset: 0; display: flex; align-items: center;
+    justify-content: center; color: var(--dim); text-align: center; padding: 20px; }
+</style>
+</head>
+<body>
+
+<div id="topbar">
+  <span class="logo">PIP</span>
+  <input id="url" type="text" placeholder="paste a youtube url — watch / youtu.be / shorts / live" spellcheck="false">
+  <button class="btn accent" id="add">+ add</button>
+  <span class="spacer"></span>
+  <button class="btn" data-preset="verticals" title="stack verticals in columns">3-verticals</button>
+  <button class="btn" data-preset="grid" title="equal tiles">grid</button>
+  <button class="btn" data-preset="focus" title="one big + column">focus</button>
+  <button class="btn" data-preset="cascade" title="offset tiles">cascade</button>
+  <button class="btn" id="muteall" title="silence every pane">mute all</button>
+  <button class="btn" id="clear" title="forget layout + videos">clear</button>
+  <span id="note"></span>
+</div>
+
+<div id="canvas"></div>
+<div id="toast"></div>
+
+<script>
+'use strict';
+/* PIP v0 — masonry multiview of YouTube embeds.
+   Panes are free-floating viewports: drag header to move, corner to resize,
+   click video = solo audio, double-click header = maximize. State persists. */
+
+const LS_KEY = 'pip.v1';
+const MAX_PANES = 6;
+const canvas = document.getElementById('canvas');
+let zTop = 10;
+const panes = new Map();          // id -> pane record
+let soloId = null;
+
+/* ---------- utils ---------- */
+const $ = (s, el=document) => el.querySelector(s);
+const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+const uid = () => Math.random().toString(36).slice(2, 9);
+
+function toast(msg) {
+  const t = $('#toast'); t.textContent = msg; t.classList.add('show');
+  clearTimeout(toast._t); toast._t = setTimeout(() => t.classList.remove('show'), 2200);
+}
+
+function parseVideoId(raw) {
+  const s = raw.trim();
+  if (/^[\w-]{11}$/.test(s)) return s;
+  const m = s.match(/(?:v=|\/embed\/|\/shorts\/|\/live\/|youtu\.be\/)([\w-]{11})/);
+  return m ? m[1] : null;
+}
+
+function save() {
+  const data = [...panes.values()].map(p => ({
+    vid: p.vid, rect: p.rect, title: p.title
+  }));
+  localStorage.setItem(LS_KEY, JSON.stringify(data));
+}
+const load = () => { try { return JSON.parse(localStorage.getItem(LS_KEY)); } catch { return null; } };
+
+/* ---------- pane lifecycle ---------- */
+function addPane(vid, rect, opts = {}) {
+  if (panes.size >= MAX_PANES) { toast(`cap is ${MAX_PANES} panes — each iframe is heavy`); return null; }
+  const id = uid();
+  const el = document.createElement('div');
+  el.className = 'pane'; el.dataset.id = id;
+  el.innerHTML = `
+    <div class="head">
+      <span class="title">loading…</span>
+      <button class="icon play" title="play / pause">⏸</button>
+      <button class="icon audio" title="solo audio">🔇</button>
+      <button class="icon close" title="remove">✕</button>
+    </div>
+    <div class="stage">
+      <div class="mount"></div>
+      <div class="veil" title="click: solo audio"></div>
+      <div class="badge"></div>
+    </div>
+    <div class="bar" title="seek"><div></div></div>
+    <div class="grip"></div>`;
+  canvas.appendChild(el);
+
+  const rec = { id, vid, el, rect, player: null, title: '', playing: false,
+    prevRect: null };
+  panes.set(id, rec);
+  applyRect(rec);
+
+  el.addEventListener('pointerdown', () => focusPane(rec));
+  $('.head', el).addEventListener('pointerdown', e => startDrag(e, rec));
+  $('.head', el).addEventListener('dblclick', () => toggleMax(rec));
+  $('.grip', el).addEventListener('pointerdown', e => startResize(e, rec));
+  $('.veil', el).addEventListener('click', () => toggleSolo(rec));
+  $('.play', el).addEventListener('click', () => togglePlay(rec));
+  $('.audio', el).addEventListener('click', () => toggleSolo(rec));
+  $('.close', el).addEventListener('click', () => removePane(rec));
+  $('.bar', el).addEventListener('click', e => {
+    if (!rec.player || !rec.player.getDuration) return;
+    const d = rec.player.getDuration();
+    if (d > 0) rec.player.seekTo(e.offsetX / e.currentTarget.offsetWidth * d, true);
+  });
+
+  rec.player = new YT.Player($('.mount', el), {
+    videoId: vid,
+    width: '100%', height: '100%',
+    playerVars: { autoplay: 1, mute: 1, controls: 0, playsinline: 1,
+      rel: 0, fs: 0, disablekb: 1, iv_load_policy: 3, origin: location.origin },
+    events: {
+      onReady: e => {
+        try { rec.title = e.target.getVideoData().title || ''; } catch {}
+        $('.title', el).textContent = rec.title;
+        e.target.playVideo();               // starts muted — the mute-wall
+      },
+      onStateChange: e => {
+        rec.playing = e.data === YT.PlayerState.PLAYING;
+        $('.play', el).textContent = rec.playing ? '⏸' : '▶';
+      },
+      onError: e => {
+        const b = $('.badge', el);
+        b.style.display = 'block';
+        b.textContent = (+e.data === 101 || +e.data === 150)
+          ? 'embed disabled by owner' : 'error ' + e.data;
+      }
+    }
+  });
+
+  if (!opts.silent) save();
+  return rec;
+}
+
+function removePane(rec) {
+  if (soloId === rec.id) soloId = null;
+  try { rec.player.destroy(); } catch {}
+  rec.el.remove(); panes.delete(rec.id); save();
+}
+
+function applyRect(rec) {
+  const { x, y, w, h } = rec.rect;
+  Object.assign(rec.el.style, {
+    left: (x * 100) + '%', top: (y * 100) + '%',
+    width: (w * 100) + '%', height: (h * 100) + '%'
+  });
+}
+
+function focusPane(rec) {
+  document.querySelectorAll('.pane.focus').forEach(p => p.classList.remove('focus'));
+  rec.el.classList.add('focus');
+  rec.el.style.zIndex = ++zTop;
+}
+
+/* ---------- drag / resize / maximize ---------- */
+function startDrag(e, rec) {
+  if (e.button !== 0) return;
+  e.preventDefault();
+  const cr = canvas.getBoundingClientRect();
+  const s = { px: e.clientX, py: e.clientY, rect: { ...rec.rect } };
+  const move = ev => {
+    const dx = (ev.clientX - s.px) / cr.width, dy = (ev.clientY - s.py) / cr.height;
+    const snap = v => Math.round(v * 100) / 100;
+    rec.rect.x = clamp(snap(s.rect.x + dx), 0, 1 - rec.rect.w);
+    rec.rect.y = clamp(snap(s.rect.y + dy), 0, 1 - rec.rect.h);
+    applyRect(rec);
+  };
+  const up = () => { window.removeEventListener('pointermove', move);
+    window.removeEventListener('pointerup', up); save(); };
+  window.addEventListener('pointermove', move);
+  window.addEventListener('pointerup', up);
+}
+
+function startResize(e, rec) {
+  if (e.button !== 0) return;
+  e.preventDefault(); e.stopPropagation();
+  const cr = canvas.getBoundingClientRect();
+  const s = { px: e.clientX, py: e.clientY, rect: { ...rec.rect } };
+  const move = ev => {
+    const dx = (ev.clientX - s.px) / cr.width, dy = (ev.clientY - s.py) / cr.height;
+    const snap = v => Math.round(v * 100) / 100;
+    rec.rect.w = clamp(snap(s.rect.w + dx), 0.12, 1 - rec.rect.x);
+    rec.rect.h = clamp(snap(s.rect.h + dy), 0.12, 1 - rec.rect.y);
+    applyRect(rec);
+  };
+  const up = () => { window.removeEventListener('pointermove', move);
+    window.removeEventListener('pointerup', up); save(); };
+  window.addEventListener('pointermove', move);
+  window.addEventListener('pointerup', up);
+}
+
+function toggleMax(rec) {
+  if (rec.prevRect) { rec.rect = rec.prevRect; rec.prevRect = null; }
+  else { rec.prevRect = { ...rec.rect }; rec.rect = { x: .02, y: .02, w: .96, h: .96 }; }
+  applyRect(rec); save();
+}
+
+/* ---------- audio: solo model ---------- */
+function toggleSolo(rec) {
+  if (soloId === rec.id) {                      // second click = back to all-muted
+    rec.player.mute(); soloId = null;
+  } else {
+    panes.forEach(p => { p.player.mute(); });
+    rec.player.unMute(); rec.player.setVolume(100);
+    if (!rec.playing) rec.player.playVideo();
+    soloId = rec.id;
+  }
+  refreshSoloUi();
+}
+
+function refreshSoloUi() {
+  panes.forEach(p => {
+    p.el.classList.toggle('solo', soloId === p.id);
+    $('.audio', p.el).classList.toggle('on', soloId === p.id);
+    $('.audio', p.el).textContent = soloId === p.id ? '🔊' : '🔇';
+  });
+}
+
+function muteAll() { soloId = null; panes.forEach(p => p.player.mute()); refreshSoloUi(); }
+
+function togglePlay(rec) {
+  if (!rec.player || !rec.player.getPlayerState) return;
+  rec.playing ? rec.player.pauseVideo() : rec.player.playVideo();
+}
+
+/* ---------- progress polling ---------- */
+setInterval(() => {
+  panes.forEach(p => {
+    if (!p.player || !p.player.getCurrentTime) return;
+    try {
+      const d = p.player.getDuration(), t = p.player.getCurrentTime();
+      if (d > 0) $('.bar > div', p.el).style.width = (t / d * 100) + '%';
+    } catch {}
+  });
+}, 500);
+
+/* ---------- layout presets ---------- */
+const PRESETS = {
+  verticals() {                        // phone-shaped columns — the point of it all
+    const n = panes.size; if (!n) return;
+    const cols = Math.min(n, 4);
+    const cw = 1 / cols;
+    const ch = Math.min(1, cw * 16 / 9 * (canvas.clientWidth / canvas.clientHeight));
+    const y0 = (1 - ch) / 2;
+    [...panes.values()].forEach((p, i) => {
+      const c = i % cols, row = Math.floor(i / cols);
+      p.rect = { x: c * cw + .01, y: y0 + row * .02, w: cw - .02, h: ch };
+      applyRect(p);
+    });
+  },
+  grid() {
+    const n = panes.size; if (!n) return;
+    const cols = Math.ceil(Math.sqrt(n)), rows = Math.ceil(n / cols);
+    [...panes.values()].forEach((p, i) => {
+      const c = i % cols, r = Math.floor(i / cols);
+      p.rect = { x: c / cols + .01, y: r / rows + .01, w: 1 / cols - .02, h: 1 / rows - .02 };
+      applyRect(p);
+    });
+  },
+  focus() {
+    const list = [...panes.values()]; if (!list.length) return;
+    const [big, ...rest] = list;
+    big.rect = { x: .01, y: .01, w: .70, h: .98 }; applyRect(big);
+    const n = rest.length, rh = 1 / Math.max(1, n) - .02;
+    rest.forEach((p, i) => {
+      p.rect = { x: .72, y: i / n + .01, w: .27, h: rh }; applyRect(p);
+    });
+  },
+  cascade() {
+    [...panes.values()].forEach((p, i) => {
+      p.rect = { x: .02 + i * .07, y: .03 + i * .06, w: .44, h: .55 }; applyRect(p);
+    });
+  }
+};
+
+document.querySelectorAll('[data-preset]').forEach(b =>
+  b.addEventListener('click', () => {
+    if (!panes.size) return toast('add a video first');
+    PRESETS[b.dataset.preset](); save();
+  }));
+
+/* ---------- topbar wiring ---------- */
+function addFromInput() {
+  const input = $('#url');
+  const vid = parseVideoId(input.value);
+  if (!vid) return toast('couldn\'t find a video id in that');
+  input.value = '';
+  const i = panes.size;
+  addPane(vid, { x: .02 + i * .07, y: .03 + i * .06, w: .44, h: .55 });
+}
+$('#add').addEventListener('click', addFromInput);
+$('#url').addEventListener('keydown', e => { if (e.key === 'Enter') addFromInput(); });
+$('#muteall').addEventListener('click', muteAll);
+$('#clear').addEventListener('click', () => {
+  localStorage.removeItem(LS_KEY); location.reload();
+});
+
+/* ---------- boot ---------- */
+window.onYouTubeIframeAPIReady = () => {
+  const saved = load();
+  if (saved && saved.length) {
+    saved.forEach(p => addPane(p.vid, p.rect, { silent: true }));
+    $('#note').textContent = `${saved.length} panes restored`;
+  } else {
+    // demo wall — replace freely
+    addPane('aqz-KE-bpKQ', { x: .02, y: .05, w: .46, h: .58 }, { silent: true }); // Big Buck Bunny
+    addPane('jNQXAC9IVRw', { x: .10, y: .13, w: .46, h: .58 }, { silent: true }); // Me at the zoo
+    addPane('eRsGyueVLvQ', { x: .18, y: .21, w: .46, h: .58 }, { silent: true }); // Sintel
+    $('#note').textContent = 'demo wall — clear to start yours';
+  }
+  refreshSoloUi();
+};
+// load the API *after* the callback is registered — kills the script-order race
+(function () {
+  const s = document.createElement('script');
+  s.src = 'https://www.youtube.com/iframe_api';
+  s.onerror = () => { $('#note').textContent = 'youtube api failed to load — check network'; };
+  document.head.appendChild(s);
+})();
+/* belt & suspenders: if the API already landed and fired before we registered,
+   YT.Player exists but our boot never ran — run it now. */
+if (window.YT && window.YT.Player && !window.__pipBooted) {
+  const t = window.onYouTubeIframeAPIReady;
+  window.onYouTubeIframeAPIReady = () => {};
+  t();
+}
+window.__pipBooted = true;
+setTimeout(() => {
+  if (!window.YT || !window.YT.Player)
+    $('#note').textContent = 'youtube api failed to load — check network';
+}, 6000);
+
+/* debug / test hook */
+window.PIP = { panes, solo: id => { const p = panes.get(id); if (p) toggleSolo(p); },
+  add: vid => addPane(vid, { x: .5, y: .3, w: .4, h: .5 }), presets: PRESETS };
+</script>
+</body>
+</html>

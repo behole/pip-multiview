@@ -1,0 +1,84 @@
+/* ==UserStyle==
+@name         bhole-tube
+@namespace    bhole.club
+@version      0.1.0
+@description  YouTube palette + noise toggles. Live-reload this file with Stylus (file:// install), git it, auto-update later from raw GitHub URL.
+@author       behole
+@license      MIT
+@match        https://www.youtube.com/*
+@match        https://youtube.com/*
+
+@var color accent "Accent color" #f05a28
+@var checkbox hideShorts "Hide Shorts (shelves + nav)" 1
+@var checkbox hideHomeRecs "Hide home recommendations grid" 0
+@var checkbox hideComments "Hide comments on watch page" 0
+@var checkbox dimGrid "Calm home grid (smaller thumbs, tighter rows)" 1
+
+==/UserStyle== */
+
+html {
+  /* palette rides on --yt-spec-* custom properties */
+  --yt-spec-base-background: #0b0b0c;
+  --yt-spec-brand-background-solid: #0b0b0c;
+  --yt-spec-general-background-a: #101012;
+  --yt-spec-general-background-b: #16161a;
+  --yt-spec-menu-background: #17171b;
+  --yt-spec-outline: #2a2a30;
+  --yt-spec-additive-background: #1d1d22;
+  --yt-spec-badge-chip-background: #1d1d22;
+  --yt-spec-button-background: #1d1d22;
+  --yt-spec-text-primary: #ececf1;
+  --yt-spec-text-secondary: #a5a5ad;
+  --yt-spec-text-disabled: #6b6b74;
+  --yt-spec-wordmark-text: #ececf1;
+  --yt-spec-static-brand-white: #ececf1;
+  --yt-spec-static-brand-red: /*[[accent]]*/ #f05a28;
+  --yt-spec-brand-primary: /*[[accent]]*/ #f05a28;
+  --yt-spec-brand-button-background: /*[[accent]]*/ #f05a28;
+  --yt-spec-call-to-action: /*[[accent]]*/ #f05a28;
+  --yt-spec-call-to-action-bright: /*[[accent]]*/ #f05a28;
+  --yt-spec-icon-inactive: #a5a5ad;
+  --yt-spec-icon-bright: #ececf1;
+}
+
+/* progress bar + accents that bake raw rgba */
+html {
+  --yt-spec-static-brand-colored-background: rgba(240, 90, 40, .15);
+}
+
+/* ---- Shorts: shelves on home/search/watch + nav entries ---- */
+/* {{#if hideShorts}} */
+ytd-reel-shelf-renderer,
+ytd-rich-section-renderer:has(ytd-rich-shelf-renderer a[href^="/shorts/"]),
+ytd-mini-guide-entry-renderer[aria-label="Shorts"],
+ytd-guide-entry-renderer:has(a[href="/shorts/"]),
+ytd-guide-entry-renderer:has(a[href="/shorts"]) {
+  display: none !important;
+}
+/* {{/if}} */
+
+/* ---- home recommendations (blank home on purpose — 0 by default) ---- */
+/* {{#if hideHomeRecs}} */
+ytd-page-manager[page-subtype="home"] ytd-rich-grid-renderer {
+  display: none !important;
+}
+/* {{/if}} */
+
+/* ---- comments ---- */
+/* {{#if hideComments}} */
+ytd-comments#comments {
+  display: none !important;
+}
+/* {{/if}} */
+
+/* ---- calmer home grid ---- */
+/* {{#if dimGrid}} */
+ytd-rich-grid-renderer {
+  --ytd-rich-grid-posts-margin: 8px;
+  --ytd-rich-grid-item-margin: 8px;
+}
+ytd-rich-item-renderer #video-title.ytd-rich-grid-media {
+  font-size: 1.4rem !important;
+  line-height: 1.3 !important;
+}
+/* {{/if}} */
