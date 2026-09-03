@@ -26,7 +26,8 @@
   .btn.accent { border-color: var(--accent); color: var(--accent); }
   .btn.on { background: var(--accent); color: #000; border-color: var(--accent); }
   .spacer { flex: 1; }
-  #note { color: var(--dim); font-size: 12px; }
+  #note { color: var(--dim); font-size: 12px; max-width: 320px; white-space: nowrap;
+    overflow: hidden; text-overflow: ellipsis; }
   #toast { position: fixed; bottom: 14px; left: 50%; transform: translateX(-50%);
     background: #1d1d22; border: 1px solid var(--edge-hi); border-radius: 8px;
     padding: 8px 14px; opacity: 0; transition: opacity .25s; pointer-events: none; z-index: 9999; }
@@ -36,12 +37,18 @@
     background:
       linear-gradient(var(--edge) 1px, transparent 1px) 0 0 / 100% 96px,
       linear-gradient(90deg, var(--edge) 1px, transparent 1px) 0 0 / 96px 100%; }
+  #canvas.drop-ok { outline: 2px dashed var(--accent); outline-offset: -6px; }
+
+  #empty { position: absolute; inset: 0; display: none; align-items: center;
+    justify-content: center; color: var(--dim); text-align: center; padding: 20px; z-index: 0; }
+  #empty.show { display: flex; }
 
   .pane { position: absolute; background: var(--pane); border: 1px solid var(--edge);
     border-radius: 10px; overflow: hidden; display: flex; flex-direction: column;
     box-shadow: 0 8px 30px rgba(0,0,0,.45); }
   .pane.focus { border-color: var(--edge-hi); }
   .pane.solo { border-color: var(--accent); }
+  .pane.replace { border-color: var(--accent); border-style: dashed; }
 
   .head { height: 30px; flex: 0 0 30px; display: flex; align-items: center; gap: 6px;
     padding: 0 4px 0 10px; background: rgba(16,16,19,.92); cursor: grab; user-select: none; }
@@ -52,10 +59,12 @@
     border-radius: 5px; cursor: pointer; font-size: 13px; line-height: 1; }
   .icon:hover { background: #1d1d22; color: var(--text); }
   .icon.audio.on { color: var(--accent); }
+  .icon.focusb.on { color: var(--accent); }
   .icon.close:hover { color: var(--danger); }
 
   .stage { position: relative; flex: 1; background: #000; }
-  .stage .mount, .stage iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+  .stage .mount, .stage iframe, .stage video { position: absolute; inset: 0;
+    width: 100%; height: 100%; border: 0; }
   .veil { position: absolute; inset: 0; z-index: 2; cursor: pointer; }
   .badge { position: absolute; top: 8px; left: 8px; z-index: 3; background: var(--danger);
     color: #fff; font-size: 11px; padding: 2px 8px; border-radius: 5px; display: none; }
@@ -63,23 +72,27 @@
   .bar { height: 4px; background: #1a1a1f; cursor: pointer; }
   .bar > div { height: 100%; width: 0%; background: var(--accent); }
 
-  /* chat pane: the iframe is the whole interaction — no transport chrome */
-  .pane.chat .play, .pane.chat .audio, .pane.chat .bar { display: none; }
-  .pane.chat .stage { background: var(--pane); }
+  /* chat/twitch/web panes: iframe is the interaction — no transport chrome */
+  .pane.chat .play, .pane.chat .audio, .pane.chat .bar,
+  .pane.twitch .play, .pane.twitch .audio, .pane.twitch .bar,
+  .pane.web .play, .pane.web .audio, .pane.web .bar { display: none; }
+  .pane.chat .stage, .pane.twitch .stage, .pane.web .stage { background: var(--pane); }
+
+  /* while dragging, iframes must not eat the pointer (the "jump" fix),
+     and the dragged pane must not shadow the drop target (the swap fix) */
+  body.dragging .stage iframe, body.dragging .stage video { pointer-events: none; }
+  body.dragging .pane.lift { pointer-events: none; }
 
   .grip { position: absolute; right: 2px; bottom: 5px; width: 14px; height: 14px;
     cursor: nwse-resize; z-index: 4;
     background: linear-gradient(135deg, transparent 50%, var(--edge-hi) 50%); }
-
-  .hint { position: absolute; inset: 0; display: flex; align-items: center;
-    justify-content: center; color: var(--dim); text-align: center; padding: 20px; }
 </style>
 </head>
 <body>
 
 <div id="topbar">
   <span class="logo">PIP</span>
-  <input id="url" type="text" placeholder="paste a youtube url — watch / youtu.be / shorts / live" spellcheck="false">
+  <input id="url" type="text" placeholder="paste a url — yt / twitch / vimeo / mp4 / any page" spellcheck="false">
   <button class="btn accent" id="add">+ add</button>
   <button class="btn" data-mode="video" title="url box adds video panes">video</button>
   <button class="btn" data-mode="chat" title="url box adds a live chat pane">chat</button>
@@ -89,63 +102,104 @@
   <button class="btn" data-preset="focus" title="one big + column">focus</button>
   <button class="btn" data-preset="cascade" title="offset tiles">cascade</button>
   <button class="btn" id="muteall" title="silence every pane">mute all</button>
-  <button class="btn" id="clear" title="forget layout + videos">clear</button>
+  <button class="btn" id="demo" title="load the demo wall">demo</button>
+  <button class="btn" id="clear" title="empty the canvas">clear</button>
   <span id="note"></span>
 </div>
 
-<div id="canvas"></div>
+<div id="canvas">
+  <div id="empty">empty wall — drop a url anywhere, or paste one above<br><br>
+    <span style="font-size:11px">youtube · twitch · vimeo · direct video files · any page that allows embedding</span></div>
+</div>
 <div id="toast"></div>
 
 <script>
 'use strict';
-/* PIP v0 — masonry multiview of YouTube embeds.
-   Panes are free-floating viewports: drag header to move, corner to resize,
-   click video = solo audio, double-click header = maximize. State persists. */
+/* PIP v1.2 — masonry multiview.
+   Panes are containers: drag headers (drop on another pane = swap),
+   drop URLs onto a pane to replace it or onto the canvas for a new pane,
+   ◎ picks the focused pane, ✎ rearms a container for a new url.
+   Kinds: youtube video, live chat, twitch, vimeo, direct video files, generic web. */
 
-const LS_KEY = 'pip.v1';
+const LS_KEY = 'pip.v1', LS_SEEN = 'pip.seen', LS_FOCUS = 'pip.focus';
 const MAX_PANES = 6;
 const canvas = document.getElementById('canvas');
 let zTop = 10;
 const panes = new Map();          // id -> pane record
 let soloId = null;
+let focusKey = null;              // vid||src of the focused pane (persists)
+let armed = null;                 // pane record waiting for a replacement url
 
 /* ---------- utils ---------- */
 const $ = (s, el=document) => el.querySelector(s);
 const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
 const uid = () => Math.random().toString(36).slice(2, 9);
+const keyOf = c => c.vid || c.src || '';
 
 function toast(msg) {
   const t = $('#toast'); t.textContent = msg; t.classList.add('show');
   clearTimeout(toast._t); toast._t = setTimeout(() => t.classList.remove('show'), 2200);
 }
 
-function parseVideoId(raw) {
-  const s = raw.trim();
-  if (/^[\w-]{11}$/.test(s)) return s;
-  const m = s.match(/(?:v=|\/embed\/|\/shorts\/|\/live\/|youtu\.be\/)([\w-]{11})/);
-  return m ? m[1] : null;
+/* ---------- universal url parser ---------- */
+function parseRef(raw) {
+  const s = (raw || '').trim().split(/\s+/)[0] || '';
+  if (!s) return null;
+  if (/^[\w-]{11}$/.test(s)) return { kind: 'video', vid: s };
+  let url;
+  try { url = new URL(/^https?:\/\//i.test(s) ? s : 'https://' + s); } catch { return null; }
+  const h = url.hostname.replace(/^www\./, '');
+  if (h === 'youtube.com' || h === 'm.youtube.com' || h === 'youtu.be') {
+    let vid = null;
+    if (h === 'youtu.be') vid = url.pathname.slice(1);
+    else if (url.pathname === '/watch') vid = url.searchParams.get('v');
+    else { const m = url.pathname.match(/^\/(?:shorts|live|embed|v)\/([\w-]{11})/); vid = m && m[1]; }
+    return vid ? { kind: 'video', vid } : null;
+  }
+  if (h === 'twitch.tv') {
+    const parts = url.pathname.split('/').filter(Boolean);
+    if (parts[0] === 'videos') return { kind: 'twitch', src: `https://player.twitch.tv/?video=${parts[1]}&parent=${location.hostname}&muted=true` };
+    return parts[0] ? { kind: 'twitch', src: `https://player.twitch.tv/?channel=${parts[0]}&parent=${location.hostname}&muted=true` } : null;
+  }
+  if (h === 'clips.twitch.tv')
+    return { kind: 'twitch', src: `https://clips.twitch.tv/embed?clip=${url.pathname.slice(1)}&parent=${location.hostname}&muted=true` };
+  if (h === 'vimeo.com') {
+    const id = url.pathname.split('/').filter(Boolean)[0];
+    return id ? { kind: 'web', src: `https://player.vimeo.com/video/${id}` } : null;
+  }
+  if (/\.(mp4|webm|ogg|mov|m4v)$/i.test(url.pathname)) return { kind: 'file', src: s };
+  return /^https?:/i.test(url.href) ? { kind: 'web', src: url.href } : null;
 }
 
+/* ---------- persistence ---------- */
 function save() {
   const data = [...panes.values()].map(p => ({
-    kind: p.kind || 'video', vid: p.vid, rect: p.rect, title: p.title
+    kind: p.kind, vid: p.vid, src: p.src, rect: p.rect, title: p.title
   }));
   localStorage.setItem(LS_KEY, JSON.stringify(data));
+  localStorage.setItem(LS_FOCUS, focusKey || '');
+  toggleEmpty();
 }
 const load = () => { try { return JSON.parse(localStorage.getItem(LS_KEY)); } catch { return null; } };
 
+function toggleEmpty() {
+  $('#empty').classList.toggle('show', panes.size === 0);
+}
+
 /* ---------- pane lifecycle ---------- */
-function addPane(vid, rect, opts = {}) {
-  if (panes.size >= MAX_PANES) { toast(`cap is ${MAX_PANES} panes — each iframe is heavy`); return null; }
+function addPane(content, rect, opts = {}) {
+  if (panes.size >= MAX_PANES) { toast(`cap is ${MAX_PANES} panes — each one is heavy`); return null; }
   const id = uid();
-  const kind = opts.kind || 'video';
+  const kind = content.kind;
   const el = document.createElement('div');
-  el.className = 'pane'; el.dataset.id = id;
+  el.className = 'pane ' + kind; el.dataset.id = id;
   el.innerHTML = `
     <div class="head">
       <span class="title">loading…</span>
       <button class="icon play" title="play / pause">⏸</button>
       <button class="icon audio" title="solo audio">🔇</button>
+      <button class="icon focusb" title="make this the focused pane">◎</button>
+      <button class="icon swapr" title="reuse this container for a new url">✎</button>
       <button class="icon close" title="remove">✕</button>
     </div>
     <div class="stage">
@@ -157,8 +211,8 @@ function addPane(vid, rect, opts = {}) {
     <div class="grip"></div>`;
   canvas.appendChild(el);
 
-  const rec = { id, kind, vid, el, rect, player: null, title: '', playing: false,
-    prevRect: null };
+  const rec = { id, kind, vid: content.vid, src: content.src, el, rect,
+    player: null, media: null, title: content.title || '', playing: false, prevRect: null };
   panes.set(id, rec);
   applyRect(rec);
 
@@ -166,50 +220,40 @@ function addPane(vid, rect, opts = {}) {
   $('.head', el).addEventListener('pointerdown', e => startDrag(e, rec));
   $('.head', el).addEventListener('dblclick', () => toggleMax(rec));
   $('.grip', el).addEventListener('pointerdown', e => startResize(e, rec));
-  $('.veil', el).addEventListener('click', () => toggleSolo(rec));
+  $('.veil', el).addEventListener('click', () => veilClick(rec));
   $('.play', el).addEventListener('click', () => togglePlay(rec));
   $('.audio', el).addEventListener('click', () => toggleSolo(rec));
+  $('.focusb', el).addEventListener('click', () => setFocus(rec));
+  $('.swapr', el).addEventListener('click', () => armReplace(rec));
   $('.close', el).addEventListener('click', () => removePane(rec));
   $('.bar', el).addEventListener('click', e => {
-    if (!rec.player || !rec.player.getDuration) return;
-    const d = rec.player.getDuration();
-    if (d > 0) rec.player.seekTo(e.offsetX / e.currentTarget.offsetWidth * d, true);
-  });
-
-  if (kind === 'chat') { buildChatPane(rec, opts); if (!opts.silent) save(); return rec; }
-
-  rec.player = new YT.Player($('.mount', el), {
-    videoId: vid,
-    width: '100%', height: '100%',
-    playerVars: { autoplay: 1, mute: 1, controls: 0, playsinline: 1,
-      rel: 0, fs: 0, disablekb: 1, iv_load_policy: 3, origin: location.origin },
-    events: {
-      onReady: e => {
-        try { rec.title = e.target.getVideoData().title || ''; } catch {}
-        $('.title', el).textContent = rec.title;
-        e.target.playVideo();               // starts muted — the mute-wall
-      },
-      onStateChange: e => {
-        rec.playing = e.data === YT.PlayerState.PLAYING;
-        $('.play', el).textContent = rec.playing ? '⏸' : '▶';
-      },
-      onError: e => {
-        const b = $('.badge', el);
-        b.style.display = 'block';
-        b.textContent = (+e.data === 101 || +e.data === 150)
-          ? 'embed disabled by owner' : 'error ' + e.data;
-      }
+    const bar = e.currentTarget;
+    const frac = e.offsetX / bar.offsetWidth;
+    if (rec.player && rec.player.getDuration) {
+      const d = rec.player.getDuration();
+      if (d > 0) rec.player.seekTo(frac * d, true);
+    } else if (rec.media && rec.media.duration > 0) {
+      rec.media.currentTime = frac * rec.media.duration;
     }
   });
+
+  if (kind === 'video') buildVideoPane(rec, opts);
+  else if (kind === 'chat') buildChatPane(rec, opts);
+  else if (kind === 'twitch') buildIframePane(rec, rec.src, 'twitch (muted embed)');
+  else if (kind === 'web') buildIframePane(rec, rec.src, 'embedded page');
+  else if (kind === 'file') buildFilePane(rec);
 
   if (!opts.silent) save();
   return rec;
 }
 
-function removePane(rec) {
+function removePane(rec, opts = {}) {
   if (soloId === rec.id) soloId = null;
-  try { rec.player.destroy(); } catch {}
-  rec.el.remove(); panes.delete(rec.id); save();
+  if (armed === rec) disarm();
+  if (focusKey === keyOf(rec)) focusKey = null;
+  try { rec.player && rec.player.destroy(); } catch {}
+  rec.el.remove(); panes.delete(rec.id);
+  if (!opts.silent) save(); else toggleEmpty();
 }
 
 function applyRect(rec) {
@@ -226,10 +270,86 @@ function focusPane(rec) {
   rec.el.style.zIndex = ++zTop;
 }
 
-/* ---------- drag / resize / maximize ---------- */
+/* ---------- pane builders ---------- */
+function buildVideoPane(rec, opts = {}) {
+  rec.player = new YT.Player($('.mount', rec.el), {
+    videoId: rec.vid,
+    width: '100%', height: '100%',
+    playerVars: { autoplay: 1, mute: 1, controls: 0, playsinline: 1,
+      rel: 0, fs: 0, disablekb: 1, iv_load_policy: 3, origin: location.origin },
+    events: {
+      onReady: e => {
+        try { rec.title = rec.title || e.target.getVideoData().title || ''; } catch {}
+        $('.title', rec.el).textContent = rec.title || rec.vid;
+        e.target.playVideo();
+      },
+      onStateChange: e => {
+        rec.playing = e.data === YT.PlayerState.PLAYING;
+        $('.play', rec.el).textContent = rec.playing ? '⏸' : '▶';
+      },
+      onError: e => {
+        const b = $('.badge', rec.el);
+        b.style.display = 'block';
+        b.textContent = (+e.data === 101 || +e.data === 150)
+          ? 'embed disabled by owner' : 'error ' + e.data;
+      }
+    }
+  });
+  $('.title', rec.el).textContent = rec.title || rec.vid;
+}
+
+function buildChatPane(rec, opts = {}) {
+  const stage = $('.stage', rec.el);
+  $('.veil', stage).style.display = 'none';
+  $('.badge', stage).style.display = 'none';
+  const iframe = document.createElement('iframe');
+  iframe.src = `https://www.youtube.com/live_chat?v=${rec.vid}&embed_domain=${location.hostname}&dark_theme=1`;
+  iframe.allow = 'autoplay; encrypted-media';
+  stage.appendChild(iframe);
+  rec.title = rec.title || opts.title || 'live chat';
+  $('.title', rec.el).textContent = rec.title;
+}
+
+function buildIframePane(rec, src, fallbackTitle) {
+  const stage = $('.stage', rec.el);
+  $('.veil', stage).style.display = 'none';          // interactive pane
+  const iframe = document.createElement('iframe');
+  iframe.src = src;
+  iframe.allow = 'autoplay; encrypted-media; fullscreen';
+  stage.appendChild(iframe);
+  rec.title = rec.title || fallbackTitle;
+  $('.title', rec.el).textContent = rec.title;
+  $('.badge', stage).textContent = 'blank? this site refuses embedding';
+}
+
+function buildFilePane(rec) {
+  const stage = $('.stage', rec.el);
+  const v = document.createElement('video');
+  v.src = rec.src; v.muted = true; v.autoplay = true; v.playsinline = true;
+  stage.appendChild(v);
+  rec.media = v;
+  v.addEventListener('play',  () => { rec.playing = true;  $('.play', rec.el).textContent = '⏸'; });
+  v.addEventListener('pause', () => { rec.playing = false; $('.play', rec.el).textContent = '▶'; });
+  v.addEventListener('error', () => {
+    const b = $('.badge', rec.el); b.style.display = 'block';
+    b.textContent = 'video file failed to load';
+  });
+  rec.title = rec.title || rec.src.split('/').pop().slice(0, 40);
+  $('.title', rec.el).textContent = rec.title;
+}
+
+function veilClick(rec) {
+  if (rec.kind === 'twitch') return toast('twitch embeds load muted — no solo');
+  if (rec.kind === 'web') return;
+  toggleSolo(rec);
+}
+
+/* ---------- drag / resize / swap / maximize ---------- */
 function startDrag(e, rec) {
   if (e.button !== 0) return;
   e.preventDefault();
+  document.body.classList.add('dragging');
+  rec.el.classList.add('lift');
   const cr = canvas.getBoundingClientRect();
   const s = { px: e.clientX, py: e.clientY, rect: { ...rec.rect } };
   const move = ev => {
@@ -239,8 +359,25 @@ function startDrag(e, rec) {
     rec.rect.y = clamp(snap(s.rect.y + dy), 0, 1 - rec.rect.h);
     applyRect(rec);
   };
-  const up = () => { window.removeEventListener('pointermove', move);
-    window.removeEventListener('pointerup', up); save(); };
+  const up = ev => {
+    window.removeEventListener('pointermove', move);
+    window.removeEventListener('pointerup', up);
+    // hit-test BEFORE unlifting: while .lift is on, the dragged pane is
+    // invisible to elementFromPoint, so the pane under the cursor is the target
+    const el = document.elementFromPoint(ev.clientX, ev.clientY);
+    const target = el && el.closest && el.closest('.pane');
+    document.body.classList.remove('dragging');
+    rec.el.classList.remove('lift');
+    if (target && target !== rec.el && panes.has(target.dataset.id)) {
+      const other = panes.get(target.dataset.id);
+      const origin = { ...s.rect };          // where the drag started
+      const targetRect = { ...other.rect };  // the slot being taken
+      other.rect = origin;                   // displaced pane → dragged's origin
+      rec.rect = targetRect;                 // dragged pane snaps into the slot
+      applyRect(other); applyRect(rec);
+    }
+    save();
+  };
   window.addEventListener('pointermove', move);
   window.addEventListener('pointerup', up);
 }
@@ -248,6 +385,7 @@ function startDrag(e, rec) {
 function startResize(e, rec) {
   if (e.button !== 0) return;
   e.preventDefault(); e.stopPropagation();
+  document.body.classList.add('dragging');
   const cr = canvas.getBoundingClientRect();
   const s = { px: e.clientX, py: e.clientY, rect: { ...rec.rect } };
   const move = ev => {
@@ -258,7 +396,8 @@ function startResize(e, rec) {
     applyRect(rec);
   };
   const up = () => { window.removeEventListener('pointermove', move);
-    window.removeEventListener('pointerup', up); save(); };
+    window.removeEventListener('pointerup', up);
+    document.body.classList.remove('dragging'); save(); };
   window.addEventListener('pointermove', move);
   window.addEventListener('pointerup', up);
 }
@@ -269,39 +408,35 @@ function toggleMax(rec) {
   applyRect(rec); save();
 }
 
-/* ---------- chat pane ---------- */
-function parseChatRef(raw) {           // any live/upcoming URL → its video id
-  const s = raw.trim();
-  if (/^[\w-]{11}$/.test(s)) return s;
-  const m = s.match(/(?:v=|youtu\.be\/|\/live\/)([\w-]{11})/);
-  return m ? m[1] : null;
+/* ---------- focus ---------- */
+function setFocus(rec) {
+  focusKey = keyOf(rec);
+  focusPane(rec);
+  const rest = [...panes.values()].filter(p => p !== rec);
+  rec.rect = { x: .01, y: .01, w: .70, h: .98 }; applyRect(rec);
+  const n = rest.length, rh = 1 / Math.max(1, n) - .02;
+  rest.forEach((p, i) => { p.rect = { x: .72, y: i / n + .01, w: .27, h: rh }; applyRect(p); });
+  panes.forEach(p => $('.focusb', p.el).classList.toggle('on', p === rec));
+  save();
 }
 
-function buildChatPane(rec, opts = {}) {
-  rec.el.classList.add('chat');
-  const stage = $('.stage', rec.el);
-  $('.veil', stage).style.display = 'none';
-  $('.badge', stage).style.display = 'none';
+/* ---------- audio: solo model (video + file panes) ---------- */
+function audible(rec) { return rec.kind === 'video' || rec.kind === 'file'; }
 
-  const iframe = document.createElement('iframe');
-  iframe.src = `https://www.youtube.com/live_chat?v=${rec.vid}&embed_domain=${location.hostname}&dark_theme=1`;
-  iframe.allow = 'autoplay; encrypted-media';
-  stage.appendChild(iframe);
-
-  rec.title = opts.title || 'live chat';
-  $('.title', rec.el).textContent = rec.title;
-  // no client-side dead-detection: the chat iframe is always cross-origin.
-  // If the stream has no chat, YouTube renders its own empty state in-frame.
-}
-
-/* ---------- audio: solo model ---------- */
 function toggleSolo(rec) {
-  if (soloId === rec.id) {                      // second click = back to all-muted
-    if (rec.player) rec.player.mute(); soloId = null;
+  if (!audible(rec)) return toast('this pane carries no audio');
+  if (soloId === rec.id) {
+    if (rec.player) rec.player.mute();
+    if (rec.media) rec.media.muted = true;
+    soloId = null;
   } else {
-    panes.forEach(p => { if (p.player) p.player.mute(); });
-    rec.player.unMute(); rec.player.setVolume(100);
-    if (!rec.playing) rec.player.playVideo();
+    panes.forEach(p => {
+      if (!audible(p)) return;
+      if (p.player) p.player.mute();
+      if (p.media) p.media.muted = true;
+    });
+    if (rec.player) { rec.player.unMute(); rec.player.setVolume(100); if (!rec.playing) rec.player.playVideo(); }
+    if (rec.media) { rec.media.muted = false; if (rec.media.paused) rec.media.play(); }
     soloId = rec.id;
   }
   refreshSoloUi();
@@ -309,33 +444,100 @@ function toggleSolo(rec) {
 
 function refreshSoloUi() {
   panes.forEach(p => {
-    p.el.classList.toggle('solo', soloId === p.id);
-    $('.audio', p.el).classList.toggle('on', soloId === p.id);
-    $('.audio', p.el).textContent = soloId === p.id ? '🔊' : '🔇';
+    const on = soloId === p.id;
+    p.el.classList.toggle('solo', on);
+    const a = $('.audio', p.el);
+    if (a) { a.classList.toggle('on', on); a.textContent = on ? '🔊' : '🔇'; }
   });
 }
 
-function muteAll() { soloId = null; panes.forEach(p => { if (p.player) p.player.mute(); }); refreshSoloUi(); }
+function muteAll() {
+  soloId = null;
+  panes.forEach(p => {
+    if (p.player) p.player.mute();
+    if (p.media) p.media.muted = true;
+  });
+  refreshSoloUi();
+}
 
 function togglePlay(rec) {
-  if (!rec.player || !rec.player.getPlayerState) return;
-  rec.playing ? rec.player.pauseVideo() : rec.player.playVideo();
+  if (rec.player && rec.player.getPlayerState) {
+    rec.playing ? rec.player.pauseVideo() : rec.player.playVideo();
+  } else if (rec.media) {
+    rec.media.paused ? rec.media.play() : rec.media.pause();
+  }
+}
+
+/* ---------- replace / arm ---------- */
+function armReplace(rec) {
+  if (armed === rec) return disarm();
+  disarm();
+  armed = rec;
+  rec.el.classList.add('replace');
+  $('#note').textContent = 'paste a url → replaces this pane · esc cancels';
+  $('#url').focus();
+}
+function disarm() {
+  if (armed) armed.el.classList.remove('replace');
+  armed = null;
+  $('#note').textContent = '';
+}
+function replacePane(rec, parsed) {
+  const z = rec.el.style.zIndex;
+  const rect = { ...rec.rect };
+  const wasFocus = focusKey === keyOf(rec);
+  removePane(rec, { silent: true });
+  const nr = addPane(parsed, rect, { silent: true });
+  if (nr) {
+    nr.el.style.zIndex = z || ++zTop;
+    if (wasFocus) setFocus(nr);
+  }
+  save();
+  return nr;
 }
 
 /* ---------- progress polling ---------- */
 setInterval(() => {
   panes.forEach(p => {
-    if (!p.player || !p.player.getCurrentTime) return;
+    const bar = $('.bar > div', p.el); if (!bar) return;
     try {
-      const d = p.player.getDuration(), t = p.player.getCurrentTime();
-      if (d > 0) $('.bar > div', p.el).style.width = (t / d * 100) + '%';
+      if (p.player && p.player.getCurrentTime) {
+        const d = p.player.getDuration(), t = p.player.getCurrentTime();
+        if (d > 0) bar.style.width = (t / d * 100) + '%';
+      } else if (p.media && p.media.duration > 0) {
+        bar.style.width = (p.media.currentTime / p.media.duration * 100) + '%';
+      }
     } catch {}
   });
 }, 500);
 
+/* ---------- drop targets: canvas + panes ---------- */
+canvas.addEventListener('dragover', e => { e.preventDefault(); canvas.classList.add('drop-ok'); });
+canvas.addEventListener('dragleave', e => { if (e.target === canvas) canvas.classList.remove('drop-ok'); });
+canvas.addEventListener('drop', e => {
+  e.preventDefault();
+  canvas.classList.remove('drop-ok');
+  const raw = e.dataTransfer.getData('text/uri-list') || e.dataTransfer.getData('text/plain');
+  const parsed = parseRef(raw);
+  if (!parsed) return toast('couldn\'t parse that url');
+  const paneEl = e.target.closest && e.target.closest('.pane');
+  if (paneEl && panes.has(paneEl.dataset.id)) {
+    replacePane(panes.get(paneEl.dataset.id), parsed);
+    return toast('container reused');
+  }
+  const cr = canvas.getBoundingClientRect();
+  const w = .44, h = .58;
+  const rect = {
+    x: clamp(Math.round(((e.clientX - cr.left) / cr.width - w / 2) * 100) / 100, 0, 1 - w),
+    y: clamp(Math.round(((e.clientY - cr.top) / cr.height - h / 2) * 100) / 100, 0, 1 - h),
+    w, h
+  };
+  addPane(parsed, rect);
+});
+
 /* ---------- layout presets ---------- */
 const PRESETS = {
-  verticals() {                        // phone-shaped columns — the point of it all
+  verticals() {
     const n = panes.size; if (!n) return;
     const cols = Math.min(n, 4);
     const cw = 1 / cols;
@@ -358,12 +560,8 @@ const PRESETS = {
   },
   focus() {
     const list = [...panes.values()]; if (!list.length) return;
-    const [big, ...rest] = list;
-    big.rect = { x: .01, y: .01, w: .70, h: .98 }; applyRect(big);
-    const n = rest.length, rh = 1 / Math.max(1, n) - .02;
-    rest.forEach((p, i) => {
-      p.rect = { x: .72, y: i / n + .01, w: .27, h: rh }; applyRect(p);
-    });
+    const big = list.find(p => keyOf(p) === focusKey) || list[0];
+    setFocus(big);
   },
   cascade() {
     [...panes.values()].forEach((p, i) => {
@@ -379,13 +577,13 @@ document.querySelectorAll('[data-preset]').forEach(b =>
   }));
 
 /* ---------- topbar wiring ---------- */
-let addMode = 'video';                 // what the url box produces next
+let addMode = 'video';
 function setMode(m) {
   addMode = m;
   $('#add').textContent = m === 'chat' ? '+ chat' : '+ add';
   $('#url').placeholder = m === 'chat'
     ? 'paste a live / upcoming stream url — chat becomes a pane'
-    : 'paste a youtube url — watch / youtu.be / shorts / live';
+    : 'paste a url — yt / twitch / vimeo / mp4 / any page';
   document.querySelectorAll('[data-mode]').forEach(b =>
     b.classList.toggle('on', b.dataset.mode === m));
 }
@@ -395,50 +593,74 @@ function addFromInput() {
   const ref = input.value;
   if (!ref.trim()) return;
   input.value = '';
+  const parsed = parseRef(ref);
+  if (!parsed) return toast('couldn\'t parse that url');
+  if (armed) {                           // replacing a specific container
+    if (addMode === 'chat') parsed.kind = 'chat', parsed.vid = parsed.vid || parsed.src;
+    replacePane(armed, parsed); disarm();
+    return toast('container reused');
+  }
   if (addMode === 'chat') {
-    const vid = parseChatRef(ref);
-    if (!vid) return toast('couldn\'t find a stream id in that');
-    addPane(vid, { x: .74, y: .01, w: .25, h: .98 }, { kind: 'chat', title: 'live chat' });
+    if (parsed.kind !== 'video') return toast('chat needs a youtube stream url');
+    parsed.kind = 'chat';
+    addPane(parsed, { x: .74, y: .01, w: .25, h: .98 }, { title: 'live chat' });
   } else {
-    const vid = parseVideoId(ref);
-    if (!vid) return toast('couldn\'t find a video id in that');
     const i = panes.size;
-    addPane(vid, { x: .02 + i * .07, y: .03 + i * .06, w: .44, h: .55 });
+    addPane(parsed, { x: .02 + i * .07, y: .03 + i * .06, w: .44, h: .55 });
   }
 }
 $('#add').addEventListener('click', addFromInput);
-$('#url').addEventListener('keydown', e => { if (e.key === 'Enter') addFromInput(); });
+$('#url').addEventListener('keydown', e => { if (e.key === 'Enter') addFromInput();
+  if (e.key === 'Escape') disarm(); });
 document.querySelectorAll('[data-mode]').forEach(b =>
   b.addEventListener('click', () => setMode(b.dataset.mode)));
 $('#muteall').addEventListener('click', muteAll);
 $('#clear').addEventListener('click', () => {
-  localStorage.removeItem(LS_KEY); location.reload();
+  [...panes.values()].forEach(p => removePane(p, { silent: true }));
+  focusKey = null; soloId = null;
+  localStorage.removeItem(LS_KEY); localStorage.removeItem(LS_FOCUS);
+  toggleEmpty();
+  $('#note').textContent = 'cleared';
 });
+$('#demo').addEventListener('click', () => loadDemo(true));
 
-/* ---------- boot ---------- */
+/* ---------- demo / boot ---------- */
+function loadDemo(click) {
+  [...panes.values()].forEach(p => removePane(p, { silent: true }));
+  focusKey = null;
+  addPane({ kind: 'video', vid: 'aqz-KE-bpKQ' }, { x: .02, y: .05, w: .46, h: .58 }, { silent: true }); // Big Buck Bunny
+  addPane({ kind: 'video', vid: 'jNQXAC9IVRw' }, { x: .10, y: .13, w: .46, h: .58 }, { silent: true }); // Me at the zoo
+  addPane({ kind: 'video', vid: 'eRsGyueVLvQ' }, { x: .18, y: .21, w: .46, h: .58 }, { silent: true }); // Sintel
+  localStorage.setItem(LS_SEEN, '1');
+  save();
+  $('#note').textContent = click ? 'demo wall' : 'demo wall — clear to start yours';
+}
+
 window.onYouTubeIframeAPIReady = () => {
   const saved = load();
   if (saved && saved.length) {
-    saved.forEach(p => addPane(p.vid, p.rect, { silent: true, kind: p.kind, title: p.title }));
+    saved.forEach(p => addPane({ kind: p.kind || 'video', vid: p.vid, src: p.src, title: p.title },
+      p.rect, { silent: true }));
+    focusKey = localStorage.getItem(LS_FOCUS) || null;
+    if (focusKey) {
+      const big = [...panes.values()].find(p => keyOf(p) === focusKey);
+      if (big) setFocus(big);
+    }
     $('#note').textContent = `${saved.length} panes restored`;
+  } else if (!localStorage.getItem(LS_SEEN)) {
+    loadDemo(false);
   } else {
-    // demo wall — replace freely
-    addPane('aqz-KE-bpKQ', { x: .02, y: .05, w: .46, h: .58 }, { silent: true }); // Big Buck Bunny
-    addPane('jNQXAC9IVRw', { x: .10, y: .13, w: .46, h: .58 }, { silent: true }); // Me at the zoo
-    addPane('eRsGyueVLvQ', { x: .18, y: .21, w: .46, h: .58 }, { silent: true }); // Sintel
-    $('#note').textContent = 'demo wall — clear to start yours';
+    toggleEmpty();
+    $('#note').textContent = 'empty wall';
   }
   refreshSoloUi();
 };
-// load the API *after* the callback is registered — kills the script-order race
 (function () {
   const s = document.createElement('script');
   s.src = 'https://www.youtube.com/iframe_api';
   s.onerror = () => { $('#note').textContent = 'youtube api failed to load — check network'; };
   document.head.appendChild(s);
 })();
-/* belt & suspenders: if the API already landed and fired before we registered,
-   YT.Player exists but our boot never ran — run it now. */
 if (window.YT && window.YT.Player && !window.__pipBooted) {
   const t = window.onYouTubeIframeAPIReady;
   window.onYouTubeIframeAPIReady = () => {};
@@ -451,10 +673,15 @@ setTimeout(() => {
 }, 6000);
 
 /* debug / test hook */
-window.PIP = { panes, solo: id => { const p = panes.get(id); if (p) toggleSolo(p); },
-  add: vid => addPane(vid, { x: .5, y: .3, w: .4, h: .5 }),
-  addChat: vid => addPane(vid, { x: .74, y: .01, w: .25, h: .98 }, { kind: 'chat' }),
-  presets: PRESETS };
+window.PIP = {
+  panes, solo: id => { const p = panes.get(id); if (p) toggleSolo(p); },
+  add: c => addPane(typeof c === 'string' ? { kind: 'video', vid: c }
+    : c, { x: .5, y: .3, w: .4, h: .5 }),
+  addChat: vid => addPane({ kind: 'chat', vid }, { x: .74, y: .01, w: .25, h: .98 }),
+  parse: parseRef, replace: (id, url) => { const p = panes.get(id); if (p) return replacePane(p, parseRef(url)); },
+  focusById: id => { const p = panes.get(id); if (p) setFocus(p); },
+  presets: PRESETS
+};
 </script>
 </body>
 </html>

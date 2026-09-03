@@ -1,142 +1,187 @@
-"""PIP headless test drive: load, players, solo audio, presets, CHAT PANE, persistence."""
-import json, time
+"""PIP v1.2 test drive: swap-drag, focus, container reuse, multi-kind, clear/demo fix."""
+import json
 from playwright.sync_api import sync_playwright
 
 OUT = "/home/behole/workspace/PIP"
 URL = "http://127.0.0.1:8321/"
-LIVE_URL = "https://www.youtube.com/watch?v=jfKfPfyJRdk"   # lofi girl — live most of the time
+MP4 = "http://127.0.0.1:8321/sample.mp4"   # local ffmpeg-generated test clip
 res = {"steps": []}
 
 def step(name, ok, detail=""):
-    res["steps"].append({"step": name, "ok": bool(ok), "detail": detail})
+    res["steps"].append({"step": name, "ok": bool(ok), "detail": str(detail)[:180]})
     print(("PASS" if ok else "FAIL"), "-", name, ("| " + str(detail) if detail else ""))
 
-def pip_state(page):
+def state(page):
     return page.evaluate("""() => {
       const P = window.PIP; if (!P) return {err:'no PIP'};
       const panes = [];
       P.panes.forEach(p => {
-        let state=null, muted=null, dur=null;
-        try {
-          if (p.player) {
-            state = p.player.getPlayerState();
-            muted = p.player.isMuted();
-            dur = Math.round(p.player.getDuration());
-          }
-        } catch(e) { state = 'ERR '+e.message; }
-        panes.push({id:p.id, kind:p.kind, vid:p.vid, title:(p.title||'').slice(0,40),
-                    state, muted, dur,
-                    hasIframe: !!p.el.querySelector('.stage iframe')});
+        let muted=null, playing=null;
+        try { if (p.player) muted = p.player.isMuted(); } catch(e){}
+        try { if (p.media) { muted = p.media.muted; playing = !p.media.paused; } } catch(e){}
+        const r = p.el.getBoundingClientRect();
+        const cr = document.getElementById('canvas').getBoundingClientRect();
+        panes.push({id:p.id, kind:p.kind, vid:p.vid, src:(p.src||'').slice(0,60),
+          rect:{x:+((r.left-cr.left)/cr.width).toFixed(3), y:+((r.top-cr.top)/cr.height).toFixed(3),
+                w:+(r.width/cr.width).toFixed(3), h:+(r.height/cr.height).toFixed(3)},
+          muted, playing,
+          hasMedia: !!p.media, hasIframe: !!p.el.querySelector('.stage iframe')});
       });
       return {count: P.panes.size, panes, note: document.querySelector('#note')?.textContent||''};
     }""")
 
+def rects(page):
+    return {p["id"]: p["rect"] for p in state(page)["panes"]}
+
 with sync_playwright() as pw:
     browser = pw.chromium.launch(channel="chrome", headless=True,
-                                 args=["--autoplay-policy=no-user-gesture-required",
-                                       "--mute-audio"])
+                                 args=["--autoplay-policy=no-user-gesture-required", "--mute-audio"])
     page = browser.new_page(viewport={"width": 1600, "height": 900})
     errors = []
     page.on("pageerror", lambda e: errors.append(str(e)))
     page.goto(URL, wait_until="domcontentloaded")
-    page.wait_for_timeout(9000)
-
-    st = pip_state(page)
-    step("boot: 3 demo panes", st.get("count") == 3, f"count={st.get('count')}")
-    playing = [p for p in st.get("panes", []) if p["state"] in (1, 3)]
-    step("players started muted (mute-wall)",
-         len(playing) >= 2 and all(p["muted"] for p in st.get("panes", []) if p["kind"] == "video"),
-         f"active={len(playing)}")
-    page.screenshot(path=f"{OUT}/shot-boot.png")
-
-    ids = [p["id"] for p in st["panes"]]
-    page.evaluate(f"() => window.PIP.solo('{ids[0]}')")
-    page.wait_for_timeout(400)
-    st2 = pip_state(page)
-    m = {p["id"]: p["muted"] for p in st2["panes"]}
-    step("solo: pane0 unmuted, others muted", m.get(ids[0]) is False and all(m[i] for i in ids[1:]), json.dumps(m))
-    page.evaluate(f"() => window.PIP.solo('{ids[0]}')")
-    page.wait_for_timeout(400)
-    step("unsolo: back to all muted", all(p["muted"] for p in pip_state(page)["panes"]))
-
-    # --- chat pane via the real UI path: mode toggle + url box ---
-    page.click('[data-mode="chat"]')
-    add_label = page.evaluate("() => document.querySelector('#add').textContent")
-    step("chat mode toggle (+ chat label)", add_label == "+ chat", add_label)
-    page.fill("#url", LIVE_URL)
-    page.press("#url", "Enter")
-    page.wait_for_timeout(3500)
-    st3 = pip_state(page)
-    chat = [p for p in st3["panes"] if p["kind"] == "chat"]
-    step("chat pane added via url box", st3.get("count") == 4 and len(chat) == 1,
-         f"count={st3.get('count')}")
-    src = page.evaluate("""() => {
-      const el = document.querySelector('.pane.chat .stage iframe');
-      return el ? el.src : null;
-    }""")
-    step("chat iframe = live_chat embed w/ domain + dark theme",
-         bool(src) and "live_chat" in src and "embed_domain=127.0.0.1" in src and "dark_theme=1" in src, src)
-    page.screenshot(path=f"{OUT}/shot-chat.png")
-
-    # honest chat-liveness probe: inspect YT's frame from inside the app page
-    page.wait_for_timeout(6000)
-    chat_frames = [f for f in page.frames if "live_chat" in (f.url or "")]
-    if chat_frames:
-        try:
-            has_renderer = chat_frames[0].evaluate(
-                "() => !!document.querySelector('yt-live-chat-renderer, #items')")
-            msg_count = chat_frames[0].evaluate(
-                "() => document.querySelectorAll('yt-live-chat-text-message-renderer').length")
-            print(f"INFO - chat frame live: renderer={has_renderer} messages={msg_count}")
-        except Exception as e:
-            print("INFO - chat frame probe blocked:", str(e)[:100])
-    else:
-        print("INFO - no live_chat frame found in page")
-
-    # chat pane coexists with audio model: solo a video while chat present
-    page.evaluate(f"() => window.PIP.solo('{ids[1]}')")
-    page.wait_for_timeout(300)
-    st4 = pip_state(page)
-    m4 = {p["id"]: p["muted"] for p in st4["panes"] if p["kind"] == "video"}
-    step("solo works with chat pane present (no crash)",
-         m4.get(ids[1]) is False and all(v for k, v in m4.items() if k != ids[1]), json.dumps(m4))
-    page.evaluate("() => { window.PIP.panes.forEach(p => p.player && p.player.mute()); }")
-
-    # add a 5th video pane, then verticals across the mixed wall
-    page.evaluate("() => window.PIP.add('kK42WEwQszc')")
-    page.wait_for_timeout(3500)
-    page.evaluate("() => window.PIP.presets.focus()")
-    page.evaluate("() => window.PIP.presets.grid()")
-    page.wait_for_timeout(300)
-    page.evaluate("() => window.PIP.presets.verticals()")
-    step("mixed-wall presets execute (5 panes: 4 video + 1 chat)",
-         pip_state(page).get("count") == 5)
-
-    # --- persistence: reload, expect 5 panes incl. the chat pane ---
+    page.evaluate("() => { localStorage.clear(); }")
     page.reload(wait_until="domcontentloaded")
     page.wait_for_timeout(9000)
-    st5 = pip_state(page)
-    chat5 = [p for p in st5.get("panes", []) if p["kind"] == "chat"]
-    step("reload: 5 panes restored", st5.get("count") == 5, f"count={st5.get('count')}")
-    step("chat pane survives reload as chat (iframe re-mounted)",
-         len(chat5) == 1 and chat5[0]["hasIframe"] and not chat5[0].get("state"),
-         json.dumps(chat5))
-    playing5 = [p for p in st5.get("panes", []) if p["state"] in (1, 3)]
-    step("restored videos autoplay muted", len(playing5) >= 2, f"active={len(playing5)}")
-    page.screenshot(path=f"{OUT}/shot-restored.png")
 
-    # --- direct probe: is YT serving chat for the live id right now? (informational) ---
-    probe = browser.new_page()
-    try:
-        probe.goto("https://www.youtube.com/live_chat?v=jfKfPfyJRdk&embed_domain=127.0.0.1&dark_theme=1",
-                   wait_until="domcontentloaded", timeout=20000)
-        probe.wait_for_timeout(4000)
-        live = probe.evaluate("() => !!document.querySelector('yt-live-chat-renderer, #items')")
-        print("INFO - live_chat endpoint serving messages for jfKfPfyJRdk:", live)
-        probe.screenshot(path=f"{OUT}/shot-chat-direct.png")
-    except Exception as e:
-        print("INFO - live_chat probe failed:", str(e)[:120])
-    probe.close()
+    # --- boot: fresh visitor gets demo; clear now truly clears ---
+    st = state(page)
+    step("fresh boot: demo wall (3 panes)", st.get("count") == 3, f"count={st.get('count')}")
+    page.click("#clear")
+    page.wait_for_timeout(300)
+    st = state(page)
+    step("clear: truly empty now (no demo respawn)",
+         st.get("count") == 0 and "cleared" in st.get("note", ""), f"count={st.get('count')} note={st.get('note')}")
+    page.click("#demo")
+    page.wait_for_timeout(6000)
+    step("demo button: reloads demo on demand", state(page).get("count") == 3)
+
+    # --- parser: one box, many kinds ---
+    cases = [
+        ("https://www.youtube.com/watch?v=dQw4w9WgXcQ", "video"),
+        ("https://youtu.be/jNQXAC9IVRw", "video"),
+        ("https://www.twitch.tv/shroud", "twitch"),
+        ("https://clips.twitch.tv/FunnyClipName", "twitch"),
+        ("https://vimeo.com/76979871", "web"),
+        (MP4, "file"),
+        ("https://example.com/page", "web"),
+    ]
+    got = page.evaluate("""(cases) => cases.map(c => {
+        const p = window.PIP.parse(c); return p ? p.kind : null;
+    })""", [c for c, _ in cases])
+    step("parser: 7 url shapes → correct kinds", got == [k for _, k in cases], json.dumps(dict(zip([c[:28] for c,_ in cases], got))))
+
+    # --- file pane: mounts, and playback advances (headless self-pauses
+    #     remote media, so drive play() explicitly and check time moves) ---
+    page.evaluate(f"() => window.PIP.add({{kind:'file', src:'{MP4}'}})")
+    page.wait_for_timeout(2500)
+    t0 = page.evaluate("() => { const p=[...window.PIP.panes.values()].find(x=>x.kind=='file'); p.media.muted=true; p.media.play(); return p.media.currentTime; }")
+    page.wait_for_timeout(1500)
+    st = state(page)
+    fp = [p for p in st["panes"] if p["kind"] == "file"]
+    t1 = page.evaluate("() => [...window.PIP.panes.values()].find(x=>x.kind=='file').media.currentTime")
+    advanced = (t1 - t0) > 0.3
+    step("file pane: mp4 mounts + playback advances", len(fp) == 1 and fp[0]["hasMedia"] and advanced,
+         f"t {t0:.2f}→{t1:.2f}")
+
+    # --- solo covers file panes ---
+    vid_ids = [p["id"] for p in st["panes"] if p["kind"] == "video"]
+    file_id = fp[0]["id"]
+    page.evaluate(f"() => window.PIP.solo('{file_id}')")
+    page.wait_for_timeout(400)
+    st = state(page)
+    fm = [p for p in st["panes"] if p["id"] == file_id][0]["muted"]
+    vm = [p for p in st["panes"] if p["id"] == vid_ids[0]][0]["muted"]
+    step("solo: file pane audible, yt panes muted", fm is False and vm is True, f"file={fm} yt={vm}")
+    page.evaluate(f"() => window.PIP.solo('{file_id}')")
+
+    # --- swap-drag: apply a non-overlapping layout first (the demo wall
+    #     overlaps by design, so "pane under cursor" is ambiguous there),
+    #     then drag A's header onto B → geometry swaps ---
+    page.evaluate("() => window.PIP.presets.grid()")
+    page.wait_for_timeout(300)
+    st = state(page)
+    a, b = st["panes"][0], st["panes"][1]
+    ra, rb = a["rect"].copy(), b["rect"].copy()
+    ha = page.evaluate(f"""() => {{
+      const el = document.querySelector('.pane[data-id="{a['id']}"] .head');
+      const r = el.getBoundingClientRect(); return {{x: r.x + r.width*0.3, y: r.y + r.height/2}};
+    }}""")
+    tb = page.evaluate(f"""() => {{
+      const el = document.querySelector('.pane[data-id="{b['id']}"]');
+      const r = el.getBoundingClientRect(); return {{x: r.x + r.width/2, y: r.y + r.height/2}};
+    }}""")
+    page.mouse.move(ha["x"], ha["y"]); page.mouse.down()
+    page.wait_for_timeout(80)
+    dragging_cls = page.evaluate("() => document.body.classList.contains('dragging')")
+    pe = page.evaluate("() => getComputedStyle(document.querySelector('.stage iframe')).pointerEvents")
+    page.mouse.move(tb["x"], tb["y"], steps=12); page.wait_for_timeout(80)
+    page.mouse.up()
+    page.wait_for_timeout(300)
+    st2 = state(page)
+    a2 = [p for p in st2["panes"] if p["id"] == a["id"]][0]["rect"]
+    b2 = [p for p in st2["panes"] if p["id"] == b["id"]][0]["rect"]
+    swapped = a2 == rb and b2 == ra
+    step("drag: body.dragging set + iframes inert (no jump)", dragging_cls and pe == "none",
+         f"cls={dragging_cls} iframe.pointerEvents={pe}")
+    step("swap: drop on another pane swaps geometry", swapped, f"a:{a2} b:{b2}")
+
+    # --- focus: ◎ makes one big + rail; persists across reload ---
+    target = [p for p in st2["panes"] if p["kind"] == "file"][0]["id"]
+    page.evaluate(f"() => window.PIP.focusById('{target}')")
+    page.wait_for_timeout(300)
+    st3 = state(page)
+    big = [p for p in st3["panes"] if p["id"] == target][0]["rect"]
+    others = [p["rect"]["w"] for p in st3["panes"] if p["id"] != target]
+    step("focus: ◎ pane takes big cell, others rail",
+         big["w"] > 0.65 and all(w < 0.35 for w in others), f"big={big['w']} rail={others}")
+    page.reload(wait_until="domcontentloaded")
+    page.wait_for_timeout(9000)
+    st4 = state(page)
+    file4 = [p for p in st4["panes"] if p["kind"] == "file"]
+    step("reload: layout + file pane + focus restored",
+         st4.get("count") == 4 and len(file4) == 1 and file4[0]["rect"]["w"] > 0.65,
+         f"count={st4.get('count')} file={len(file4)}")
+
+    # --- container reuse via ✎ arm + url box ---
+    arm_id = [p for p in st4["panes"] if p["kind"] == "video"][0]["id"]
+    rect_before = [p for p in st4["panes"] if p["id"] == arm_id][0]["rect"]
+    page.evaluate(f"() => {{ const p=[...window.PIP.panes.values()].find(x=>x.id==='{arm_id}'); p && p.el.querySelector('.swapr').click(); }}")
+    page.wait_for_timeout(200)
+    armed_note = page.evaluate("() => document.querySelector('#note').textContent")
+    page.fill("#url", MP4)
+    page.press("#url", "Enter")
+    page.wait_for_timeout(5000)
+    st5 = state(page)
+    same_spot = [p for p in st5["panes"] if p["kind"] == "file" and p["rect"] == rect_before]
+    step("reuse: ✎ arms pane, new url replaces in-place (same rect, new kind)",
+         "paste a url" in armed_note and st5.get("count") == 4 and len(same_spot) == 1,
+         f"note={armed_note} count={st5.get('count')}")
+
+    # --- drop a url onto a pane = reuse; onto canvas = new pane ---
+    drop_res = page.evaluate("""() => {
+      const target = [...document.querySelectorAll('.pane')][1];
+      const r = target.getBoundingClientRect();
+      const dt = new DataTransfer();
+      dt.setData('text/uri-list', 'https://www.twitch.tv/shroud');
+      const ev = new DragEvent('drop', {bubbles:true, cancelable:true, dataTransfer:dt,
+        clientX: r.x + r.width/2, clientY: r.y + r.height/2});
+      target.dispatchEvent(ev);
+      return {kinds: [...window.PIP.panes.values()].map(p=>p.kind), count: window.PIP.panes.size};
+    }""")
+    step("drop-on-pane: reuses that container (→ twitch)",
+         "twitch" in drop_res["kinds"], json.dumps(drop_res["kinds"]))
+    before = state(page).get("count")
+    page.evaluate("""() => {
+      const c = document.querySelector('#canvas');
+      const dt = new DataTransfer();
+      dt.setData('text/uri-list', 'https://vimeo.com/76979871');
+      c.dispatchEvent(new DragEvent('drop', {bubbles:true, cancelable:true, dataTransfer:dt,
+        clientX: 300, clientY: 300}));
+    }""")
+    page.wait_for_timeout(400)
+    after = state(page).get("count")
+    step("drop-on-canvas: creates new pane", after == before + 1, f"{before}→{after}")
 
     step("no page JS errors", not errors, "; ".join(errors[:3]))
     browser.close()

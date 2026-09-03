@@ -22,6 +22,19 @@ solo one audio, ignore the algorithm entirely.
   the stream's live chat becomes just another viewport (dark theme, real
   scroll, can send if you're logged into YouTube). Chat panes are
   kind-aware in persistence and exempt from the audio model.
+- **v1.2 — containers, not just players.**
+  - Drop a URL on empty canvas → new pane right there. Drop it *on a
+    pane* → that container is reused in place.
+  - Drag one pane's header onto another → they swap slots (dragged snaps
+    into the target's cell; the displaced one takes the drag's origin).
+  - **◎** picks the focused pane (big cell + rail, remembered across
+    reloads); double-click header still maximizes.
+  - **✎** rearms a container: next URL pasted in the box replaces it.
+  - Beyond YouTube: Twitch channels/clips/videos, Vimeo, direct video
+    files (mp4/webm/ogg), and any page that allows embedding — one URL
+    box, auto-detected. Sites that send `X-Frame-Options: DENY` can't be
+    framed by anyone; they get a hint badge.
+  - `clear` truly empties the wall; the demo is its own `demo` button.
 
 ## Run it
 
@@ -62,3 +75,4 @@ reasons-to-visit are yours.
 - Search pane (Data API, 100 free queries/day)
 - Channel → active-stream auto-resolve for chat panes (1-quota API call)
 - Document PiP pop-out of the whole wall
+- Snap-to-shapes: drag a pane to a zone (halves, thirds) and it locks in
