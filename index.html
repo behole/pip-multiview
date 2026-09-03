@@ -219,7 +219,10 @@ function addPane(content, rect, opts = {}) {
   applyRect(rec);
 
   el.addEventListener('pointerdown', () => focusPane(rec));
-  $('.head', el).addEventListener('pointerdown', e => startDrag(e, rec));
+  $('.head', el).addEventListener('pointerdown', e => {
+    if (e.target.closest('.icon')) return;   // header buttons are clicks, not drags
+    startDrag(e, rec);
+  });
   $('.head', el).addEventListener('dblclick', () => toggleMax(rec));
   $('.grip', el).addEventListener('pointerdown', e => startResize(e, rec));
   $('.veil', el).addEventListener('click', () => veilClick(rec));
@@ -353,9 +356,11 @@ function startDrag(e, rec) {
   document.body.classList.add('dragging');
   rec.el.classList.add('lift');
   const cr = canvas.getBoundingClientRect();
-  const s = { px: e.clientX, py: e.clientY, rect: { ...rec.rect } };
+  const s = { px: e.clientX, py: e.clientY, rect: { ...rec.rect }, moved: false };
   const move = ev => {
     const dx = (ev.clientX - s.px) / cr.width, dy = (ev.clientY - s.py) / cr.height;
+    if (!s.moved && Math.hypot(dx * cr.width, dy * cr.height) < 4) return;  // dead zone
+    s.moved = true;
     const snap = v => Math.round(v * 100) / 100;
     rec.rect.x = clamp(snap(s.rect.x + dx), 0, 1 - rec.rect.w);
     rec.rect.y = clamp(snap(s.rect.y + dy), 0, 1 - rec.rect.h);
@@ -364,6 +369,11 @@ function startDrag(e, rec) {
   const up = ev => {
     window.removeEventListener('pointermove', move);
     window.removeEventListener('pointerup', up);
+    if (!s.moved) {                      // a click, not a drag — nothing to do
+      document.body.classList.remove('dragging');
+      rec.el.classList.remove('lift');
+      return;
+    }
     // hit-test BEFORE unlifting: while .lift is on, the dragged pane is
     // invisible to elementFromPoint, so the pane under the cursor is the target
     const el = document.elementFromPoint(ev.clientX, ev.clientY);
