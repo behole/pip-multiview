@@ -43,6 +43,10 @@ solo one audio, ignore the algorithm entirely.
 
 ## Run it
 
+**Or don't — it's deployed:** https://pip-multiview.pages.dev
+
+Found something broken? [Open an issue](https://github.com/behole/pip-multiview/issues) — real feedback welcome.
+
 ```sh
 cd ~/workspace/PIP
 python3 -m http.server 8321 --bind 0.0.0.0
