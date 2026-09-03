@@ -62,6 +62,8 @@ with sync_playwright() as pw:
         ("https://youtu.be/jNQXAC9IVRw", "video"),
         ("https://www.twitch.tv/shroud", "twitch"),
         ("https://clips.twitch.tv/FunnyClipName", "twitch"),
+        ("https://www.tiktok.com/@scout2015/video/6718335390845095173", "tiktok"),
+        ("https://www.tiktok.com/@someuser", "web"),
         ("https://vimeo.com/76979871", "web"),
         (MP4, "file"),
         ("https://example.com/page", "web"),
@@ -69,7 +71,7 @@ with sync_playwright() as pw:
     got = page.evaluate("""(cases) => cases.map(c => {
         const p = window.PIP.parse(c); return p ? p.kind : null;
     })""", [c for c, _ in cases])
-    step("parser: 7 url shapes → correct kinds", got == [k for _, k in cases], json.dumps(dict(zip([c[:28] for c,_ in cases], got))))
+    step("parser: 9 url shapes → correct kinds", got == [k for _, k in cases], json.dumps(dict(zip([c[:28] for c,_ in cases], got))))
 
     # --- file pane: mounts, and playback advances (headless self-pauses
     #     remote media, so drive play() explicitly and check time moves) ---

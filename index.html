@@ -72,11 +72,13 @@
   .bar { height: 4px; background: #1a1a1f; cursor: pointer; }
   .bar > div { height: 100%; width: 0%; background: var(--accent); }
 
-  /* chat/twitch/web panes: iframe is the interaction — no transport chrome */
+  /* chat/twitch/tiktok/web panes: iframe is the interaction — no transport chrome */
   .pane.chat .play, .pane.chat .audio, .pane.chat .bar,
   .pane.twitch .play, .pane.twitch .audio, .pane.twitch .bar,
+  .pane.tiktok .play, .pane.tiktok .audio, .pane.tiktok .bar,
   .pane.web .play, .pane.web .audio, .pane.web .bar { display: none; }
-  .pane.chat .stage, .pane.twitch .stage, .pane.web .stage { background: var(--pane); }
+  .pane.chat .stage, .pane.twitch .stage, .pane.tiktok .stage,
+  .pane.web .stage { background: var(--pane); }
 
   /* while dragging, iframes must not eat the pointer (the "jump" fix),
      and the dragged pane must not shadow the drop target (the swap fix) */
@@ -92,7 +94,7 @@
 
 <div id="topbar">
   <span class="logo">PIP</span>
-  <input id="url" type="text" placeholder="paste a url — yt / twitch / vimeo / mp4 / any page" spellcheck="false">
+  <input id="url" type="text" placeholder="paste a url — yt / tiktok / twitch / vimeo / mp4 / any page" spellcheck="false">
   <button class="btn accent" id="add">+ add</button>
   <button class="btn" data-mode="video" title="url box adds video panes">video</button>
   <button class="btn" data-mode="chat" title="url box adds a live chat pane">chat</button>
@@ -165,6 +167,12 @@ function parseRef(raw) {
   }
   if (h === 'clips.twitch.tv')
     return { kind: 'twitch', src: `https://clips.twitch.tv/embed?clip=${url.pathname.slice(1)}&parent=${location.hostname}&muted=true` };
+  if (h.endsWith('tiktok.com')) {
+    const m = url.pathname.match(/^\/@[^/]+\/(?:video|photo)\/(\d+)/);
+    if (m) return { kind: 'tiktok', src: `https://www.tiktok.com/embed/v2/${m[1]}` };
+    if (h === 'vm.tiktok.com' || h === 'vt.tiktok.com') return null; // share links redirect — can't embed
+    return { kind: 'web', src: url.href };   // profiles etc. → refusal badge
+  }
   if (h === 'vimeo.com') {
     const id = url.pathname.split('/').filter(Boolean)[0];
     return id ? { kind: 'web', src: `https://player.vimeo.com/video/${id}` } : null;
@@ -245,6 +253,7 @@ function addPane(content, rect, opts = {}) {
   if (kind === 'video') buildVideoPane(rec, opts);
   else if (kind === 'chat') buildChatPane(rec, opts);
   else if (kind === 'twitch') buildIframePane(rec, rec.src, 'twitch (muted embed)');
+  else if (kind === 'tiktok') buildIframePane(rec, rec.src, 'tiktok');
   else if (kind === 'web') buildIframePane(rec, rec.src, 'embedded page');
   else if (kind === 'file') buildFilePane(rec);
 
@@ -619,7 +628,7 @@ function setMode(m) {
   $('#add').textContent = m === 'chat' ? '+ chat' : '+ add';
   $('#url').placeholder = m === 'chat'
     ? 'paste a live / upcoming stream url — chat becomes a pane'
-    : 'paste a url — yt / twitch / vimeo / mp4 / any page';
+    : 'paste a url — yt / tiktok / twitch / vimeo / mp4 / any page';
   document.querySelectorAll('[data-mode]').forEach(b =>
     b.classList.toggle('on', b.dataset.mode === m));
 }
