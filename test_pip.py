@@ -115,6 +115,38 @@ with sync_playwright() as pw:
     step("solo: file pane audible, yt panes muted", fm is False and vm is True, f"file={fm} yt={vm}")
     page.evaluate(f"() => window.PIP.solo('{file_id}')")
 
+    # --- real-pointer clicks: header buttons must respond to genuine mouse
+    #     events (v1.3.1 regression: startDrag swallowed pointerdown on
+    #     buttons, synthetic .click() couldn't catch it) ---
+    def click_btn(pane_idx, sel):
+        xy = page.evaluate(f"""() => {{
+          const pane = [...document.querySelectorAll('.pane')][{pane_idx}];
+          const r = pane.querySelector('{sel}').getBoundingClientRect();
+          return {{x: r.x + r.width/2, y: r.y + r.height/2}};
+        }}""")
+        page.mouse.move(xy["x"], xy["y"]); page.mouse.down(); page.mouse.up()
+        page.wait_for_timeout(400)
+
+    click_btn(0, ".audio")
+    m0 = page.evaluate("() => [...window.PIP.panes.values()][0].player.isMuted()")
+    step("real click solo btn: unmutes pane 0", m0 is False, f"muted={m0}")
+    click_btn(0, ".audio")
+    m0b = page.evaluate("() => [...window.PIP.panes.values()][0].player.isMuted()")
+    step("real click solo btn: second click re-mutes", m0b is True, f"muted={m0b}")
+
+    # drag via real pointer: header drag must still move the pane after the
+    # button opt-out fix (drag arms only after 4px dead-zone)
+    xy = page.evaluate("""() => { const p=[...document.querySelectorAll('.pane')][0];
+      const r = p.querySelector('.title').getBoundingClientRect();
+      return {x: r.x + 10, y: r.y + r.height/2}; }""")
+    x_before = page.evaluate("() => [...window.PIP.panes.values()][0].el.getBoundingClientRect().x")
+    page.mouse.move(xy["x"], xy["y"]); page.mouse.down()
+    page.mouse.move(xy["x"] + 150, xy["y"] + 60, steps=8); page.mouse.up()
+    page.wait_for_timeout(300)
+    x_after = page.evaluate("() => [...window.PIP.panes.values()][0].el.getBoundingClientRect().x")
+    step("real pointer drag: header drag moves the pane", x_after - x_before > 100, f"dx={x_after-x_before:.0f}px")
+
+
     # --- swap-drag: apply a non-overlapping layout first (the demo wall
     #     overlaps by design, so "pane under cursor" is ambiguous there),
     #     then drag A's header onto B → geometry swaps ---
@@ -234,40 +266,11 @@ with sync_playwright() as pw:
     after = state(page).get("count")
     step("drop-on-canvas: creates new pane", after == before + 1, f"{before}→{after}")
 
-    # --- real-pointer clicks: header buttons must respond to genuine mouse
-    #     events (v1.3.1 regression: startDrag swallowed pointerdown on
-    #     buttons, synthetic .click() couldn't catch it) ---
-    def click_btn(pane_idx, sel):
-        xy = page.evaluate(f"""() => {{
-          const pane = [...document.querySelectorAll('.pane')][{pane_idx}];
-          const r = pane.querySelector('{sel}').getBoundingClientRect();
-          return {{x: r.x + r.width/2, y: r.y + r.height/2}};
-        }}""")
-        page.mouse.move(xy["x"], xy["y"]); page.mouse.down(); page.mouse.up()
-        page.wait_for_timeout(400)
-
-    click_btn(0, ".audio")
-    m0 = page.evaluate("() => [...window.PIP.panes.values()][0].player.isMuted()")
-    step("real click solo btn: unmutes pane 0", m0 is False, f"muted={m0}")
-    click_btn(0, ".audio")
-    m0b = page.evaluate("() => [...window.PIP.panes.values()][0].player.isMuted()")
-    step("real click solo btn: second click re-mutes", m0b is True, f"muted={m0b}")
+    # close-button check runs last: it mutates pane count, nothing downstream may depend on it
     n_before = page.evaluate("() => window.PIP.panes.size")
     click_btn(2, ".close")
     n_after = page.evaluate("() => window.PIP.panes.size")
     step("real click close btn: removes the pane", n_after == n_before - 1, f"{n_before}->{n_after}")
-
-    # drag via real pointer: header drag must still move the pane after the
-    # button opt-out fix (drag arms only after 4px dead-zone)
-    xy = page.evaluate("""() => { const p=[...document.querySelectorAll('.pane')][0];
-      const r = p.querySelector('.title').getBoundingClientRect();
-      return {x: r.x + 10, y: r.y + r.height/2}; }""")
-    x_before = page.evaluate("() => [...window.PIP.panes.values()][0].el.getBoundingClientRect().x")
-    page.mouse.move(xy["x"], xy["y"]); page.mouse.down()
-    page.mouse.move(xy["x"] + 150, xy["y"] + 60, steps=8); page.mouse.up()
-    page.wait_for_timeout(300)
-    x_after = page.evaluate("() => [...window.PIP.panes.values()][0].el.getBoundingClientRect().x")
-    step("real pointer drag: header drag moves the pane", x_after - x_before > 100, f"dx={x_after-x_before:.0f}px")
 
     step("no page JS errors", not errors, "; ".join(errors[:3]))
     browser.close()
