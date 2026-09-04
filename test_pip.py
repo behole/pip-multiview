@@ -1,11 +1,28 @@
-"""PIP v1.2 test drive: swap-drag, focus, container reuse, multi-kind, clear/demo fix."""
+"""PIP test drive: swap-drag, focus, container reuse, multi-kind, clear/demo fix,
+real-pointer header buttons + drag (v1.3.1 regression: synthetic .click() can't
+catch hit-testing bugs)."""
 import json
+import functools
+import http.server
+import threading
 from playwright.sync_api import sync_playwright
 
 OUT = "/home/behole/workspace/PIP"
-URL = "http://127.0.0.1:8321/"
-MP4 = "http://127.0.0.1:8321/sample.mp4"   # local ffmpeg-generated test clip
+PORT = 8321
+URL = f"http://127.0.0.1:{PORT}/"
+MP4 = f"http://127.0.0.1:{PORT}/sample.mp4"   # local ffmpeg-generated test clip
 res = {"steps": []}
+
+def serve_here():
+    """Background static server so the test is self-contained (was: manual
+    `python3 -m http.server 8321` — the test would hang on goto without it)."""
+    handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=OUT)
+    try:
+        httpd = http.server.ThreadingHTTPServer(("127.0.0.1", PORT), handler)
+    except OSError:
+        return None                      # dev server already running on PORT
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    return httpd
 
 def step(name, ok, detail=""):
     res["steps"].append({"step": name, "ok": bool(ok), "detail": str(detail)[:180]})
@@ -34,6 +51,7 @@ def rects(page):
     return {p["id"]: p["rect"] for p in state(page)["panes"]}
 
 with sync_playwright() as pw:
+    serve_here()
     browser = pw.chromium.launch(channel="chrome", headless=True,
                                  args=["--autoplay-policy=no-user-gesture-required", "--mute-audio"])
     page = browser.new_page(viewport={"width": 1600, "height": 900})
@@ -215,6 +233,41 @@ with sync_playwright() as pw:
     page.wait_for_timeout(400)
     after = state(page).get("count")
     step("drop-on-canvas: creates new pane", after == before + 1, f"{before}→{after}")
+
+    # --- real-pointer clicks: header buttons must respond to genuine mouse
+    #     events (v1.3.1 regression: startDrag swallowed pointerdown on
+    #     buttons, synthetic .click() couldn't catch it) ---
+    def click_btn(pane_idx, sel):
+        xy = page.evaluate(f"""() => {{
+          const pane = [...document.querySelectorAll('.pane')][{pane_idx}];
+          const r = pane.querySelector('{sel}').getBoundingClientRect();
+          return {{x: r.x + r.width/2, y: r.y + r.height/2}};
+        }}""")
+        page.mouse.move(xy["x"], xy["y"]); page.mouse.down(); page.mouse.up()
+        page.wait_for_timeout(400)
+
+    click_btn(0, ".audio")
+    m0 = page.evaluate("() => [...window.PIP.panes.values()][0].player.isMuted()")
+    step("real click solo btn: unmutes pane 0", m0 is False, f"muted={m0}")
+    click_btn(0, ".audio")
+    m0b = page.evaluate("() => [...window.PIP.panes.values()][0].player.isMuted()")
+    step("real click solo btn: second click re-mutes", m0b is True, f"muted={m0b}")
+    n_before = page.evaluate("() => window.PIP.panes.size")
+    click_btn(2, ".close")
+    n_after = page.evaluate("() => window.PIP.panes.size")
+    step("real click close btn: removes the pane", n_after == n_before - 1, f"{n_before}->{n_after}")
+
+    # drag via real pointer: header drag must still move the pane after the
+    # button opt-out fix (drag arms only after 4px dead-zone)
+    xy = page.evaluate("""() => { const p=[...document.querySelectorAll('.pane')][0];
+      const r = p.querySelector('.title').getBoundingClientRect();
+      return {x: r.x + 10, y: r.y + r.height/2}; }""")
+    x_before = page.evaluate("() => [...window.PIP.panes.values()][0].el.getBoundingClientRect().x")
+    page.mouse.move(xy["x"], xy["y"]); page.mouse.down()
+    page.mouse.move(xy["x"] + 150, xy["y"] + 60, steps=8); page.mouse.up()
+    page.wait_for_timeout(300)
+    x_after = page.evaluate("() => [...window.PIP.panes.values()][0].el.getBoundingClientRect().x")
+    step("real pointer drag: header drag moves the pane", x_after - x_before > 100, f"dx={x_after-x_before:.0f}px")
 
     step("no page JS errors", not errors, "; ".join(errors[:3]))
     browser.close()

@@ -149,6 +149,8 @@ function toast(msg) {
 function parseRef(raw) {
   const s = (raw || '').trim().split(/\s+/)[0] || '';
   if (!s) return null;
+  // pone: deliberate shortcut — any bare 11-char word is treated as a YT video id.
+  // Ceiling: non-id strings get an "error 100" badge instead of "couldn't parse".
   if (/^[\w-]{11}$/.test(s)) return { kind: 'video', vid: s };
   let url;
   try { url = new URL(/^https?:\/\//i.test(s) ? s : 'https://' + s); } catch { return null; }
@@ -336,11 +338,9 @@ function buildIframePane(rec, src, fallbackTitle) {
   const b = $('.badge', stage);
   b.textContent = 'blank? this site refuses embedding';
   b.style.display = 'block';
-  // cross-origin means we can't confirm blankness — hide the hint once the
-  // frame signals it's alive (any paint fires load; stubborn blanks keep it)
-  iframe.addEventListener('load', () => setTimeout(() => {
-    b.style.display = 'none';
-  }, 4000));
+  // cross-origin means we can't confirm blankness: a refused frame still
+  // fires load in Chromium, so any auto-hide would vanish the badge exactly
+  // when it's needed. The hint stays; its wording hedges for framed-ok sites.
 }
 
 function buildFilePane(rec) {
@@ -641,7 +641,10 @@ function addFromInput() {
   const parsed = parseRef(ref);
   if (!parsed) return toast('couldn\'t parse that url');
   if (armed) {                           // replacing a specific container
-    if (addMode === 'chat') parsed.kind = 'chat', parsed.vid = parsed.vid || parsed.src;
+    if (addMode === 'chat') {
+      if (parsed.kind !== 'video') return toast('chat needs a youtube stream url');
+      parsed.kind = 'chat', parsed.vid = parsed.vid || parsed.src;
+    }
     replacePane(armed, parsed); disarm();
     return toast('container reused');
   }

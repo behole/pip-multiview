@@ -70,7 +70,7 @@ GitHub URL).
 ## Test
 
 ```sh
-python3 test_pip.py   # headless Chrome, boots the page and drives every feature
+python3 test_pip.py   # headless Chrome; serves the folder itself and drives the core features
 ```
 
 ## v1 boundary, on purpose
@@ -81,6 +81,7 @@ reasons-to-visit are yours.
 
 ## Ideas on deck
 
+- Right-click context menu: add pane at cursor, per-pane actions (solo/focus/reuse/remove)
 - Search pane (Data API, 100 free queries/day)
 - Channel → active-stream auto-resolve for chat panes (1-quota API call)
 - Document PiP pop-out of the whole wall
