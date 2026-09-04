@@ -84,6 +84,9 @@
      and the dragged pane must not shadow the drop target (the swap fix) */
   body.dragging .stage iframe, body.dragging .stage video { pointer-events: none; }
   body.dragging .pane.lift { pointer-events: none; }
+  /* during an external URL drag the same suppression stops cross-origin
+     iframes from swallowing the drop and navigating themselves instead */
+  #canvas.drop-ok .stage iframe, #canvas.drop-ok .stage video { pointer-events: none; }
 
   .grip { position: absolute; right: 2px; bottom: 5px; width: 14px; height: 14px;
     cursor: nwse-resize; z-index: 4;

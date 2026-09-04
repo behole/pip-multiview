@@ -4,10 +4,11 @@ catch hit-testing bugs)."""
 import json
 import functools
 import http.server
+import os
 import threading
 from playwright.sync_api import sync_playwright
 
-OUT = "/home/behole/workspace/PIP"
+OUT = os.path.dirname(os.path.abspath(__file__))
 PORT = 8321
 URL = f"http://127.0.0.1:{PORT}/"
 MP4 = f"http://127.0.0.1:{PORT}/sample.mp4"   # local ffmpeg-generated test clip
@@ -241,6 +242,21 @@ with sync_playwright() as pw:
          "paste a url" in armed_note and st5.get("count") == 4 and len(same_spot) == 1,
          f"note={armed_note} count={st5.get('count')}")
 
+    # --- regression: armed + chat mode must refuse non-YT urls (the v1.4 fix) ---
+    vid_pane = [p for p in st5["panes"] if p["kind"] == "video"][0]["id"] if any(
+        p["kind"] == "video" for p in st5["panes"]) else None
+    if vid_pane:
+        page.click("button[data-mode='chat']")
+        page.evaluate(f"() => {{ const p=[...window.PIP.panes.values()].find(x=>x.id==='{vid_pane}'); p.el.querySelector('.swapr').click(); }}")
+        page.fill("#url", "https://vimeo.com/76979871")
+        page.press("#url", "Enter")
+        page.wait_for_timeout(400)
+        still_web = page.evaluate(f"() => {{ const p=[...window.PIP.panes.values()].find(x=>x.id==='{vid_pane}'); return p.kind; }}")
+        step("armed+chat: vimeo paste refused (pane kind unchanged, no broken chat embed)",
+             still_web == "video", f"kind={still_web}")
+        page.click("button[data-mode='']") if page.query_selector("button[data-mode='']") else page.keyboard.press("Escape")
+        page.evaluate("() => { document.querySelector('#note').textContent=''; }")
+
     # --- drop a url onto a pane = reuse; onto canvas = new pane ---
     drop_res = page.evaluate("""() => {
       const target = [...document.querySelectorAll('.pane')][1];
@@ -265,6 +281,18 @@ with sync_playwright() as pw:
     page.wait_for_timeout(400)
     after = state(page).get("count")
     step("drop-on-canvas: creates new pane", after == before + 1, f"{before}→{after}")
+
+    # --- regression: refusal-hint badge must persist after iframe load (was auto-hidden at 4s).
+    #     buildIframePane (twitch/web panes) sets it on mount; YT panes only badge onError. ---
+    badge = page.evaluate("""() => {
+      const p = [...window.PIP.panes.values()].find(x =>
+        (x.kind === 'twitch' || x.kind === 'web') && x.el.querySelector('.stage iframe'));
+      if (!p) return null;
+      const b = p.el.querySelector('.badge');
+      return {kind: p.kind, shown: getComputedStyle(b).display !== 'none', text: b.textContent};
+    }""")
+    step("refusal badge stays visible after load (no auto-hide)",
+         badge and badge["shown"] and "refus" in badge["text"], f"badge={badge}")
 
     # close-button check runs last: it mutates pane count, nothing downstream may depend on it
     n_before = page.evaluate("() => window.PIP.panes.size")

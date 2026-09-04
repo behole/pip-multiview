@@ -1,3 +1,5 @@
 shot-*.png
 __pycache__/
 .wrangler/
+# repo front-door shot, used by README
+!shot-boot.png

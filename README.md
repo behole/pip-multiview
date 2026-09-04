@@ -30,10 +30,11 @@ solo one audio, ignore the algorithm entirely.
   - **◎** picks the focused pane (big cell + rail, remembered across
     reloads); double-click header still maximizes.
   - **✎** rearms a container: next URL pasted in the box replaces it.
-  - Beyond YouTube: Twitch channels/clips/videos, Vimeo, direct video
-    files (mp4/webm/ogg), and any page that allows embedding — one URL
-    box, auto-detected. Sites that send `X-Frame-Options: DENY` can't be
-    framed by anyone; they get a hint badge.
+  - Beyond YouTube: TikTok videos/photos, Twitch channels/clips/videos,
+    Vimeo, direct video files (mp4/webm/ogg), and any page that allows
+    embedding — one URL box, auto-detected. Framed panes carry a standing
+    "refuses embedding?" hint (cross-origin blankness can't be confirmed
+    from outside), so refuse-embed sites fail visibly instead of silently.
 - **Rotate without dragging (v1.3).** `⟲`/`⟳` — or just the arrow keys —
   rotate contents across the wall's slots in reading order. The shape
   never changes, players keep playing through it, and the whole class of
